@@ -3,35 +3,6 @@
 # Update system
 apt update && apt upgrade -y
 
-# Install Node.js 18
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-apt-get install -y nodejs
-
-# Install PM2
-npm install pm2 -g
-
-# Install Nginx
-apt install nginx -y
-
-# Install Certbot for SSL
-apt install certbot python3-certbot-nginx -y
-
-# Install Redis
-apt install redis-server -y
-
-# Configure Redis
-sed -i 's/supervised no/supervised systemd/' /etc/redis/redis.conf
-sed -i 's/# requirepass foobared/requirepass $REDIS_PASSWORD/' /etc/redis/redis.conf
-systemctl restart redis.service
-
-# Install PostgreSQL
-apt install postgresql postgresql-contrib -y
-
-# Configure PostgreSQL
-sudo -u postgres psql -c "CREATE DATABASE deiex;"
-sudo -u postgres psql -c "CREATE USER deiex WITH ENCRYPTED PASSWORD '$DB_PASSWORD';"
-sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE deiex TO deiex;"
-
 # Setup SSL
 certbot --nginx -d api.deiex.com --non-interactive --agree-tos -m your-email@example.com
 
@@ -43,7 +14,30 @@ nginx -t && systemctl restart nginx
 # Setup application
 mkdir -p /root/deiex-api
 cd /root/deiex-api
+
+# Create .env file
+cat > .env << EOF
+# Database Configuration
+DATABASE_URL="postgresql://deiexuser:${DB_PASSWORD}@localhost:5432/deiex"
+
+# Redis Configuration
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=${REDIS_PASSWORD}
+
+# JWT Configuration
+JWT_SECRET=${JWT_SECRET}
+JWT_EXPIRES_IN=1d
+
+# Server Configuration
+PORT=3000
+NODE_ENV=production
+EOF
+
+# Install dependencies and build
 npm install
+npx prisma generate
+npx prisma migrate deploy
 npm run build
 
 # Start application with PM2

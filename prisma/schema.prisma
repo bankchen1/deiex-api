@@ -11,19 +11,27 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  password  String
-  username  String   @unique
-  role      String   @default("user")
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                String    @id @default(uuid())
+  email            String    @unique
+  password         String
+  username         String    @unique
+  role             String    @default("user")
+  isActive         Boolean   @default(true)
+  twoFactorEnabled Boolean   @default(false)
+  twoFactorSecret  String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   // 关联
-  strategies Strategy[]
-  positions  Position[]
-  balances   Balance[]
+  strategies       Strategy[]
+  positions       Position[]
+  balances        Balance[]
+  orders          Order[]
+  trades          Trade[]
+  notifications   Notification[]
+  apiKeys         ApiKey[]
+  wallets         Wallet[]
+  transactions    Transaction[]
 }
 
 model Strategy {
@@ -39,9 +47,10 @@ model Strategy {
   updatedAt   DateTime @updatedAt
 
   // 关联
-  userId    String
-  user      User       @relation(fields: [userId], references: [id])
-  positions Position[]
+  userId      String
+  user        User       @relation(fields: [userId], references: [id])
+  positions   Position[]
+  backtests   Backtest[]
 }
 
 model Position {
@@ -49,11 +58,13 @@ model Position {
   side        String
   type        String
   size        Decimal
+  leverage    Decimal   @default(1)
   entryPrice  Decimal
   exitPrice   Decimal?
   stopLoss    Decimal?
   takeProfit  Decimal?
   status      String
+  pnl         Decimal?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   closedAt    DateTime?
@@ -63,6 +74,7 @@ model Position {
   user        User     @relation(fields: [userId], references: [id])
   strategyId  String
   strategy    Strategy @relation(fields: [strategyId], references: [id])
+  orders      Order[]
 }
 
 model Balance {
@@ -70,28 +82,38 @@ model Balance {
   asset     String
   free      Decimal
   locked    Decimal
+  total     Decimal  @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   // 关联
   userId    String
   user      User     @relation(fields: [userId], references: [id])
+  transactions Transaction[]
 }
 
 model Symbol {
-  id          String   @id @default(uuid())
-  name        String   @unique
-  baseAsset   String
-  quoteAsset  String
-  minPrice    Decimal
-  maxPrice    Decimal
-  tickSize    Decimal
-  minQty      Decimal
-  maxQty      Decimal
-  stepSize    Decimal
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id            String   @id @default(uuid())
+  name          String   @unique
+  baseAsset     String
+  quoteAsset    String
+  minPrice      Decimal
+  maxPrice      Decimal
+  tickSize      Decimal
+  minQty        Decimal
+  maxQty        Decimal
+  stepSize      Decimal
+  isActive      Boolean  @default(true)
+  tradingFee    Decimal  @default(0)
+  fundingRate   Decimal? 
+  nextFundingTime DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // 关联
+  orders        Order[]
+  trades        Trade[]
+  klines        Kline[]
 }
 
 model Kline {
@@ -107,5 +129,130 @@ model Kline {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // 关联
+  symbolRef Symbol  @relation(fields: [symbol], references: [name])
+
   @@index([symbol, interval, timestamp])
+}
+
+model Order {
+  id            String    @id @default(uuid())
+  type          String    // LIMIT, MARKET
+  side          String    // BUY, SELL
+  status        String    // NEW, FILLED, CANCELED, REJECTED
+  price         Decimal?
+  quantity      Decimal
+  filledQty     Decimal   @default(0)
+  remainingQty  Decimal?
+  triggerPrice  Decimal?  // For stop orders
+  timeInForce   String?   // GTC, IOC, FOK
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  filledAt      DateTime?
+
+  // 关联
+  userId        String
+  user          User      @relation(fields: [userId], references: [id])
+  symbolId      String
+  symbol        Symbol    @relation(fields: [symbolId], references: [id])
+  positionId    String?
+  position      Position? @relation(fields: [positionId], references: [id])
+  trades        Trade[]
+}
+
+model Trade {
+  id            String   @id @default(uuid())
+  price         Decimal
+  quantity      Decimal
+  commission    Decimal
+  commissionAsset String
+  createdAt     DateTime @default(now())
+
+  // 关联
+  userId        String
+  user          User    @relation(fields: [userId], references: [id])
+  symbolId      String
+  symbol        Symbol  @relation(fields: [symbolId], references: [id])
+  orderId       String
+  order         Order   @relation(fields: [orderId], references: [id])
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  type      String
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  readAt    DateTime?
+
+  // 关联
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model ApiKey {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  secret      String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  lastUsedAt  DateTime?
+
+  // 关联
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+}
+
+model Wallet {
+  id          String   @id @default(uuid())
+  address     String
+  chain       String   // ETH, BSC, etc.
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // 关联
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  transactions Transaction[]
+}
+
+model Transaction {
+  id          String   @id @default(uuid())
+  type        String   // DEPOSIT, WITHDRAWAL
+  amount      Decimal
+  status      String   // PENDING, COMPLETED, FAILED
+  txHash      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  completedAt DateTime?
+
+  // 关联
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  walletId    String
+  wallet      Wallet   @relation(fields: [walletId], references: [id])
+  balanceId   String
+  balance     Balance  @relation(fields: [balanceId], references: [id])
+}
+
+model Backtest {
+  id          String   @id @default(uuid())
+  startTime   DateTime
+  endTime     DateTime
+  initialBalance Decimal
+  finalBalance  Decimal
+  totalTrades   Int
+  winRate       Decimal
+  sharpeRatio   Decimal
+  maxDrawdown   Decimal
+  parameters    Json
+  results       Json
+  createdAt    DateTime @default(now())
+
+  // 关联
+  strategyId   String
+  strategy     Strategy @relation(fields: [strategyId], references: [id])
 }
