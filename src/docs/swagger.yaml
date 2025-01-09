@@ -1,0 +1,36 @@
+openapi: 3.0.0
+info:
+  title: DEiEX Exchange API
+  version: 1.0.0
+  description: API documentation for DEiEX cryptocurrency exchange platform
+
+servers:
+  - url: http://localhost:3000
+    description: Development server
+
+tags:
+  - name: Auth
+    description: Authentication endpoints
+  - name: User
+    description: User management endpoints
+  - name: Market
+    description: Market data endpoints
+  - name: Trade
+    description: Trading endpoints
+  - name: Wallet
+    description: Wallet management endpoints
+  - name: Statistics
+    description: Trading statistics endpoints
+  - name: Payment
+    description: Payment management endpoints
+  - name: Social Trading
+    description: Social trading features
+  - name: Perpetual
+    description: Perpetual trading endpoints
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

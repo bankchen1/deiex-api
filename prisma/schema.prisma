@@ -1,0 +1,111 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  username  String   @unique
+  role      String   @default("user")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // 关联
+  strategies Strategy[]
+  positions  Position[]
+  balances   Balance[]
+}
+
+model Strategy {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  type        String
+  symbol      String
+  interval    String
+  parameters  Json
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // 关联
+  userId    String
+  user      User       @relation(fields: [userId], references: [id])
+  positions Position[]
+}
+
+model Position {
+  id          String    @id @default(uuid())
+  side        String
+  type        String
+  size        Decimal
+  entryPrice  Decimal
+  exitPrice   Decimal?
+  stopLoss    Decimal?
+  takeProfit  Decimal?
+  status      String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  closedAt    DateTime?
+
+  // 关联
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  strategyId  String
+  strategy    Strategy @relation(fields: [strategyId], references: [id])
+}
+
+model Balance {
+  id        String   @id @default(uuid())
+  asset     String
+  free      Decimal
+  locked    Decimal
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // 关联
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model Symbol {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  baseAsset   String
+  quoteAsset  String
+  minPrice    Decimal
+  maxPrice    Decimal
+  tickSize    Decimal
+  minQty      Decimal
+  maxQty      Decimal
+  stepSize    Decimal
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Kline {
+  id        String   @id @default(uuid())
+  symbol    String
+  interval  String
+  timestamp DateTime
+  open      Decimal
+  high      Decimal
+  low       Decimal
+  close     Decimal
+  volume    Decimal
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([symbol, interval, timestamp])
+}
