@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards, Get, HttpCode, HttpStatus, Patch } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, Get, HttpCode, HttpStatus, Patch, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { 
@@ -12,6 +12,7 @@ import {
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { User } from '../user/entities/user.entity';
+import { Request } from 'express';
 
 @ApiTags('认证')
 @Controller('auth')
@@ -78,16 +79,16 @@ export class AuthController {
    * @param user 当前用户
    * @param changePasswordDto 修改密码信息
    */
-  @Patch('change-password')
   @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
+  @Post('change-password')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: '修改密码' })
   @ApiResponse({ status: HttpStatus.OK, description: '密码修改成功' })
   async changePassword(
-    @CurrentUser() user: User,
-    @Body() changePasswordDto: ChangePasswordDto,
+    @Req() req: Request,
+    @Body() changePasswordDto: ChangePasswordDto
   ) {
+    const user = req.user as { id: string };
     return this.authService.changePassword(user.id, changePasswordDto);
   }
 
@@ -96,16 +97,16 @@ export class AuthController {
    * @param user 当前用户
    * @param enable2FADto 两步验证配置
    */
-  @Post('2fa/enable')
   @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
+  @Post('2fa/enable')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: '配置两步验证' })
   @ApiResponse({ status: HttpStatus.OK, description: '两步验证配置成功' })
   async enable2FA(
-    @CurrentUser() user: User,
-    @Body() enable2FADto: Enable2FADto,
+    @Req() req: Request,
+    @Body() enable2FADto: Enable2FADto
   ) {
+    const user = req.user as { id: string };
     return this.authService.configure2FA(user.id, enable2FADto);
   }
 
@@ -114,16 +115,16 @@ export class AuthController {
    * @param user 当前用户
    * @param verify2FADto 验证码信息
    */
-  @Post('2fa/verify')
   @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
+  @Post('2fa/verify')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: '验证两步验证码' })
   @ApiResponse({ status: HttpStatus.OK, description: '验证成功' })
   async verify2FA(
-    @CurrentUser() user: User,
-    @Body() verify2FADto: Verify2FADto,
+    @Req() req: Request,
+    @Body() verify2FADto: Verify2FADto
   ) {
+    const user = req.user as { id: string };
     return this.authService.verify2FA(user.id, verify2FADto.code);
   }
 
@@ -131,9 +132,8 @@ export class AuthController {
    * 发送邮箱验证邮件
    * @param user 当前用户
    */
-  @Post('email/verify/send')
   @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
+  @Post('email/verify/send')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: '发送邮箱验证邮件' })
   @ApiResponse({ status: HttpStatus.OK, description: '验证邮件已发送' })

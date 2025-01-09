@@ -1,57 +1,40 @@
-import {
-  WebSocketGateway,
-  WebSocketServer,
-  SubscribeMessage,
-  OnGatewayConnection,
-  OnGatewayDisconnect,
-  ConnectedSocket,
-  MessageBody,
-  WsException,
-} from '@nestjs/websockets';
-import { UseGuards, Logger, Injectable } from '@nestjs/common';
+import { WebSocketGateway, WebSocketServer, SubscribeMessage, OnGatewayConnection, OnGatewayDisconnect, ConnectedSocket, MessageBody, WsException } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { WsJwtGuard } from '../../auth/guards/ws-jwt.guard';
 import { MarketService } from '../market.service';
-import { InjectRedis } from '@liaoliaots/nestjs-redis';
-import Redis from 'ioredis';
+import { RedisService } from '../../../modules/redis/redis.service';
+import { RateLimiterService } from '../../../shared/services/rate-limiter.service';
+import { Logger, Injectable } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { DepthService } from '../services/depth.service';
-import { PrometheusService } from '../../monitoring/services/prometheus.service';
-import { RateLimiterService } from '../../shared/services/rate-limiter.service';
+import { PrometheusService } from '../../../shared/services/prometheus.service';
 
 interface SubscriptionMessage {
   symbol: string;
   channel: string;
 }
 
+@Injectable()
 @WebSocketGateway({
   namespace: 'market',
   cors: {
     origin: '*',
-    methods: ['GET', 'POST'],
-    credentials: true,
   },
 })
-@UseGuards(WsJwtGuard)
-@Injectable()
 export class MarketGateway implements OnGatewayConnection, OnGatewayDisconnect {
-  @WebSocketServer()
-  server: Server;
-
   private readonly logger = new Logger(MarketGateway.name);
+  @WebSocketServer() server: Server;
+
+  private readonly RATE_LIMIT_WINDOW = 60000; // 1 minute
+  private readonly MAX_SUBSCRIPTIONS = 50; // Max subscriptions per client
+  private readonly BUFFER_SIZE = 1000; // Maximum number of messages to buffer
   private readonly clientSubscriptions = new Map<string, Set<string>>();
   private readonly channelBuffers = new Map<string, any[]>();
-  private readonly BUFFER_SIZE = 1000;
-  private readonly RATE_LIMIT_WINDOW = 60000; // 1分钟
-  private readonly MAX_SUBSCRIPTIONS = 50; // 每个客户端最大订阅数
+  private readonly eventEmitter: EventEmitter2;
 
   constructor(
     private readonly marketService: MarketService,
-    private readonly depthService: DepthService,
-    @InjectRedis() private readonly redis: Redis,
-    private readonly eventEmitter: EventEmitter2,
+    private readonly redisService: RedisService,
+    private readonly rateLimiterService: RateLimiterService,
     private readonly prometheusService: PrometheusService,
-    private readonly rateLimiter: RateLimiterService,
   ) {
     this.initializeEventListeners();
   }
@@ -87,31 +70,42 @@ export class MarketGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   async handleConnection(client: Socket) {
     try {
-      this.logger.log(`Client connected: ${client.id}`);
+      // 检查连接限制
+      const canConnect = await this.rateLimiterService.checkRateLimit(
+        `ws:connect:${client.handshake.address}`,
+        1,
+        60,
+      );
+
+      if (!canConnect) {
+        throw new WsException('Too many connection attempts. Please try again later.');
+      }
+
+      // 初始化客户端订阅集合
       this.clientSubscriptions.set(client.id, new Set());
-      
-      // 记录连接指标
-      this.prometheusService.incrementConnections();
-      
-      // 发送当前市场状态
+
+      // 更新连接指标
+      this.prometheusService.incrementWebSocketConnections();
+
+      // 发送市场状态
       const marketStatus = await this.marketService.getMarketStatus();
       client.emit('market_status', marketStatus);
     } catch (error) {
-      this.logger.error(`Connection error: ${error.message}`);
       client.disconnect();
+      this.logger.error(`Connection error: ${error.message}`);
     }
   }
 
   async handleDisconnect(client: Socket) {
     try {
-      this.logger.log(`Client disconnected: ${client.id}`);
+      // 清理客户端订阅
       await this.marketService.unsubscribeFromMarketData(client.id);
       this.clientSubscriptions.delete(client.id);
-      
-      // 记录断开连接指标
-      this.prometheusService.decrementConnections();
+
+      // 更新连接指标
+      this.prometheusService.decrementWebSocketConnections();
     } catch (error) {
-      this.logger.error(`Disconnection error: ${error.message}`);
+      this.logger.error(`Disconnect error: ${error.message}`);
     }
   }
 
@@ -120,122 +114,112 @@ export class MarketGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() message: SubscriptionMessage,
   ) {
-    const startTime = Date.now();
     try {
-      // 检查速率限制
-      const canSubscribe = await this.rateLimiter.checkLimit(
-        `ws:${client.id}`,
-        this.RATE_LIMIT_WINDOW,
-        this.MAX_SUBSCRIPTIONS
-      );
-      
-      if (!canSubscribe) {
-        throw new WsException('Rate limit exceeded');
-      }
-
       const { symbol, channel } = message;
+
+      // 验证订阅参数
       if (!symbol || !channel) {
-        throw new WsException('Invalid subscription message');
+        throw new WsException('Invalid subscription parameters');
       }
 
+      // 检查订阅数量限制
       const subscriptions = this.clientSubscriptions.get(client.id);
-      const subKey = `${symbol}:${channel}`;
-      
-      if (subscriptions?.has(subKey)) {
-        return { event: 'error', data: 'Already subscribed to this channel' };
-      }
-
-      if (subscriptions?.size >= this.MAX_SUBSCRIPTIONS) {
+      if (subscriptions && subscriptions.size >= this.MAX_SUBSCRIPTIONS) {
         throw new WsException('Maximum subscription limit reached');
       }
 
+      // 添加到订阅列表
+      const channelKey = `${symbol}:${channel}`;
+      subscriptions.add(channelKey);
+
+      // 订阅市场数据
       await this.marketService.subscribeToMarketData(client.id, symbol, channel);
-      subscriptions?.add(subKey);
 
-      // 发送初始数据
-      const initialData = await this.getInitialData(symbol, channel);
-      client.emit('data', {
-        symbol,
-        channel,
-        data: initialData,
-      });
+      // 发送确认消息
+      client.emit('subscribed', { symbol, channel });
 
-      // 记录订阅指标
-      this.prometheusService.recordSubscription(symbol, channel);
+      // 更新订阅指标
+      this.prometheusService.incrementSubscriptions(channel);
 
-      return { event: 'subscribed', data: { symbol, channel } };
+      // 发送缓存的数据
+      await this.sendBufferedData(client, symbol, channel);
+
     } catch (error) {
+      client.emit('error', { message: error.message });
       this.logger.error(`Subscription error: ${error.message}`);
-      // 记录错误指标
-      this.prometheusService.incrementErrors('subscription_error');
-      throw new WsException(error.message);
-    } finally {
-      // 记录处理时间
-      this.prometheusService.recordLatency('subscription_latency', Date.now() - startTime);
     }
   }
 
-  private async getInitialData(symbol: string, channel: string): Promise<any> {
-    switch (channel) {
-      case 'depth':
-        return await this.depthService.getDepth(symbol);
-      case 'kline':
-        return await this.marketService.getKlineData(symbol);
-      case 'ticker':
-        return await this.marketService.getTickerData(symbol);
-      default:
-        throw new WsException('Invalid channel');
+  private async sendBufferedData(client: Socket, symbol: string, channel: string) {
+    try {
+      const channelKey = `${symbol}:${channel}`;
+      const buffer = this.channelBuffers.get(channelKey) || [];
+
+      if (buffer.length > this.BUFFER_SIZE) {
+        buffer.splice(0, buffer.length - this.BUFFER_SIZE);
+      }
+
+      for (const data of buffer) {
+        client.emit(channelKey, data);
+      }
+
+      // 更新指标
+      this.prometheusService.observeMessageLatency(channel, Date.now() - buffer[buffer.length - 1]?.timestamp);
+
+    } catch (error) {
+      throw new WsException(`Failed to send buffered data: ${error.message}`);
+    }
+  }
+
+  @SubscribeMessage('unsubscribe')
+  async handleUnsubscribe(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() message: { symbol: string; channel: string },
+  ) {
+    try {
+      const { symbol, channel } = message;
+      const channelKey = `${symbol}:${channel}`;
+
+      // 从订阅列表中移除
+      const subscriptions = this.clientSubscriptions.get(client.id);
+      if (subscriptions) {
+        subscriptions.delete(channelKey);
+      }
+
+      // 取消订阅市场数据
+      await this.marketService.unsubscribeFromMarketData(client.id);
+
+      // 发送确认消息
+      client.emit('unsubscribed', { symbol, channel });
+
+      // 更新指标
+      this.prometheusService.decrementSubscriptions(channel);
+
+    } catch (error) {
+      client.emit('error', { message: error.message });
+      this.logger.error(`Unsubscribe error: ${error.message}`);
     }
   }
 
   private broadcastToChannel(channel: string, data: any) {
-    // 更新channel buffer
-    const buffer = this.channelBuffers.get(channel) || [];
-    buffer.push(data);
-    if (buffer.length > this.BUFFER_SIZE) {
-      buffer.shift();
-    }
-    this.channelBuffers.set(channel, buffer);
-
-    // 广播数据
-    this.server.to(channel).emit('data', data);
-    
-    // 记录广播指标
-    this.prometheusService.incrementBroadcasts(channel);
-  }
-
-  // 获取channel的历史数据
-  @SubscribeMessage('history')
-  async getChannelHistory(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() message: { symbol: string; channel: string; limit?: number },
-  ) {
     try {
-      const { symbol, channel, limit = 100 } = message;
-      const buffer = this.channelBuffers.get(`${symbol}:${channel}`) || [];
-      return buffer.slice(-Math.min(limit, this.BUFFER_SIZE));
-    } catch (error) {
-      this.logger.error(`History error: ${error.message}`);
-      throw new WsException(error.message);
-    }
-  }
+      // 更新缓冲区
+      let buffer = this.channelBuffers.get(channel) || [];
+      buffer.push(data);
 
-  // 获取服务器状态
-  @SubscribeMessage('server_status')
-  async getServerStatus() {
-    try {
-      const status = await this.marketService.getServerStatus();
-      return {
-        event: 'server_status',
-        data: {
-          ...status,
-          connections: this.server.engine.clientsCount,
-          uptime: process.uptime(),
-        },
-      };
+      if (buffer.length > this.BUFFER_SIZE) {
+        buffer.splice(0, buffer.length - this.BUFFER_SIZE);
+      }
+
+      this.channelBuffers.set(channel, buffer);
+
+      // 广播到所有订阅的客户端
+      this.server.to(channel).emit(channel, data);
+
+      // 更新指标
+      this.prometheusService.incrementMessagesSent(channel);
     } catch (error) {
-      this.logger.error(`Server status error: ${error.message}`);
-      throw new WsException(error.message);
+      this.logger.error(`Broadcast error: ${error.message}`);
     }
   }
 }

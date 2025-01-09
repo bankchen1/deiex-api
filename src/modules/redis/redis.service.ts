@@ -1,10 +1,14 @@
 import { Injectable } from '@nestjs/common';
-import { InjectRedis } from '@liaoliaots/nestjs-redis';
-import Redis from 'ioredis';
+import IORedis, { Redis, ChainableCommander } from 'ioredis';
+import { RedisService as NestRedisService } from '@liaoliaots/nestjs-redis';
 
 @Injectable()
 export class RedisService {
-  constructor(@InjectRedis() private readonly redis: Redis) {}
+  private readonly redis: Redis;
+
+  constructor(private readonly redisService: NestRedisService) {
+    this.redis = this.redisService.getClient();
+  }
 
   async get(key: string): Promise<string | null> {
     return await this.redis.get(key);
@@ -18,6 +22,16 @@ export class RedisService {
     }
   }
 
+  async setNX(key: string, value: string, ttl?: number): Promise<boolean> {
+    if (ttl) {
+      const result = await this.redis.set(key, value, 'EX', ttl, 'NX');
+      return result === 'OK';
+    } else {
+      const result = await this.redis.set(key, value, 'NX');
+      return result === 'OK';
+    }
+  }
+
   async del(key: string): Promise<void> {
     await this.redis.del(key);
   }
@@ -27,16 +41,12 @@ export class RedisService {
     return result === 1;
   }
 
+  async expire(key: string, ttl: number): Promise<void> {
+    await this.redis.expire(key, ttl);
+  }
+
   async ttl(key: string): Promise<number> {
     return await this.redis.ttl(key);
-  }
-
-  async expire(key: string, seconds: number): Promise<void> {
-    await this.redis.expire(key, seconds);
-  }
-
-  async keys(pattern: string): Promise<string[]> {
-    return await this.redis.keys(pattern);
   }
 
   async hget(key: string, field: string): Promise<string | null> {
@@ -53,5 +63,21 @@ export class RedisService {
 
   async hgetall(key: string): Promise<Record<string, string>> {
     return await this.redis.hgetall(key);
+  }
+
+  multi(): ChainableCommander {
+    return this.redis.multi();
+  }
+
+  async watch(key: string): Promise<void> {
+    await this.redis.watch(key);
+  }
+
+  async unwatch(): Promise<void> {
+    await this.redis.unwatch();
+  }
+
+  getClient(): Redis {
+    return this.redis;
   }
 }

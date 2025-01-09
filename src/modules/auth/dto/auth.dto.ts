@@ -49,11 +49,12 @@ export class ResetPasswordDto {
 export class ChangePasswordDto {
   @ApiProperty({ description: '当前密码' })
   @IsString()
-  currentPassword: string;
+  @MinLength(6)
+  oldPassword: string;
 
   @ApiProperty({ description: '新密码' })
   @IsString()
-  @MinLength(8, { message: '密码长度至少为8位' })
+  @MinLength(6)
   newPassword: string;
 }
 

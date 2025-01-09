@@ -1,20 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { InjectRedis } from '@liaoliaots/nestjs-redis';
+import { InjectRedis } from '@nestjs-modules/ioredis';
 import Redis from 'ioredis';
-import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../prisma/prisma.service';
+import { Web3Service } from '../../web3/web3.service';
 import { ConfigService } from '@nestjs/config';
-import { PrometheusService } from '../../monitoring/services/prometheus.service';
-import { WalletService } from './wallet.service';
-import { Web3Service } from './web3.service';
-import { 
-  WalletTransaction,
-  TransactionType,
-  TransactionStatus,
-  ChainConfig,
-  CurrencyConfig,
-  WithdrawalLimit,
-} from '../types/wallet.types';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Cron } from '@nestjs/schedule';
 
 interface WithdrawalRequest {
@@ -30,18 +20,16 @@ interface WithdrawalRequest {
 export class WithdrawalService {
   private readonly logger = new Logger(WithdrawalService.name);
   private readonly WITHDRAWAL_LOCK_KEY = 'withdrawal:lock:';
-  private readonly WITHDRAWAL_LOCK_TTL = 300; // 5分钟
+  private readonly WITHDRAWAL_LOCK_TTL = 60; // 60 seconds
   private readonly currencyConfigs: Map<string, CurrencyConfig> = new Map();
   private readonly chainConfigs: Map<string, ChainConfig> = new Map();
 
   constructor(
-    private readonly prisma: PrismaService,
     @InjectRedis() private readonly redis: Redis,
-    private readonly eventEmitter: EventEmitter2,
-    private readonly configService: ConfigService,
-    private readonly prometheusService: PrometheusService,
-    private readonly walletService: WalletService,
+    private readonly prisma: PrismaService,
     private readonly web3Service: Web3Service,
+    private readonly configService: ConfigService,
+    private readonly eventEmitter: EventEmitter2,
   ) {
     this.initializeConfigs();
   }
@@ -202,7 +190,7 @@ export class WithdrawalService {
 
       // 并行处理提现
       await Promise.all(
-        pendingWithdrawals.map(withdrawal => this.processWithdrawal(withdrawal))
+        pendingWithdrawals.map(withdrawal => this.processWithdrawal(withdrawal.id))
       );
 
       // 记录性能指标
@@ -213,82 +201,54 @@ export class WithdrawalService {
     }
   }
 
-  private async processWithdrawal(withdrawal: WalletTransaction) {
-    const lockKey = `${this.WITHDRAWAL_LOCK_KEY}${withdrawal.id}`;
-    const locked = await this.redis.set(lockKey, '1', 'NX', 'EX', this.WITHDRAWAL_LOCK_TTL);
-    
+  async processWithdrawal(withdrawalId: string): Promise<void> {
+    const lockKey = `withdrawal:lock:${withdrawalId}`;
+    const locked = await this.redis.set(lockKey, '1', 'EX', this.WITHDRAWAL_LOCK_TTL, 'NX');
+
     if (!locked) {
-      return; // 另一个进程正在处理
+      this.logger.debug(`Withdrawal ${withdrawalId} is already being processed`);
+      return;
     }
 
     try {
-      // 获取钱包
-      const wallet = await this.prisma.wallet.findUnique({
-        where: { id: withdrawal.walletId },
+      const withdrawal = await this.prisma.walletTransaction.findUnique({
+        where: { id: withdrawalId },
+        include: { wallet: true },
       });
 
-      if (!wallet) {
-        throw new Error('Wallet not found');
+      if (!withdrawal || withdrawal.type !== 'WITHDRAWAL' || withdrawal.status !== 'PENDING') {
+        return;
       }
 
-      // 发送链上交易
-      const txHash = await this.web3Service.sendWithdrawal({
+      await this.web3Service.sendWithdrawal({
+        to: withdrawal.wallet.address,
+        amount: withdrawal.amount.toString(),
         currency: withdrawal.currency,
-        toAddress: withdrawal.toAddress,
-        amount: withdrawal.amount,
-        memo: withdrawal.memo,
       });
 
-      // 更新提现状态
       await this.prisma.walletTransaction.update({
-        where: { id: withdrawal.id },
-        data: {
-          status: TransactionStatus.PROCESSING,
-          txHash,
-          updatedAt: new Date(),
-        },
+        where: { id: withdrawalId },
+        data: { status: 'COMPLETED' },
       });
 
-      // 发送提现处理事件
-      this.eventEmitter.emit('wallet.withdrawal.processing', {
+      await this.eventEmitter.emit('withdrawal.completed', {
+        withdrawalId,
         userId: withdrawal.userId,
-        currency: withdrawal.currency,
-        amount: withdrawal.amount,
-        txHash,
-        withdrawal,
       });
-
     } catch (error) {
-      this.logger.error(
-        `Failed to process withdrawal ${withdrawal.id}: ${error.message}`
-      );
+      this.logger.error(`Failed to process withdrawal ${withdrawalId}:`, error);
 
-      // 更新提现状态为失败
       await this.prisma.walletTransaction.update({
-        where: { id: withdrawal.id },
-        data: {
-          status: TransactionStatus.FAILED,
-          updatedAt: new Date(),
-        },
+        where: { id: withdrawalId },
+        data: { status: 'FAILED' },
       });
 
-      // 解冻余额
-      await this.walletService.unfreezeBalance(
-        withdrawal.walletId,
-        withdrawal.amount + withdrawal.fee
-      );
-
-      // 发送提现失败事件
-      this.eventEmitter.emit('wallet.withdrawal.failed', {
+      await this.eventEmitter.emit('withdrawal.failed', {
+        withdrawalId,
         userId: withdrawal.userId,
-        currency: withdrawal.currency,
-        amount: withdrawal.amount,
         error: error.message,
-        withdrawal,
       });
-
     } finally {
-      // 释放锁
       await this.redis.del(lockKey);
     }
   }
@@ -345,7 +305,6 @@ export class WithdrawalService {
       if (confirmations >= currencyConfig.confirmations) {
         await this.completeWithdrawal(withdrawal);
       }
-
     } catch (error) {
       this.logger.error(
         `Failed to update withdrawal status for ${withdrawal.id}: ${error.message}`

@@ -1,19 +1,19 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { InjectRedis } from '@liaoliaots/nestjs-redis';
-import Redis from 'ioredis';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../../modules/prisma/prisma.service';
+import { RedisService } from '../../../modules/redis/redis.service';
 import { OrderBookLevel } from '../../trade/types/order-book.types';
 
 @Injectable()
 export class DepthService {
   private readonly logger = new Logger(DepthService.name);
+  private readonly DEPTH_UPDATE_INTERVAL: number = 100; // ms
   private readonly depthLevels: number;
   private readonly depthUpdateThreshold: number;
 
   constructor(
-    @InjectRedis() private readonly redis: Redis,
+    private readonly redisService: RedisService,
     private readonly eventEmitter: EventEmitter2,
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
@@ -24,20 +24,21 @@ export class DepthService {
 
   async updateDepth(symbol: string, side: 'BUY' | 'SELL', price: number, amount: number) {
     const key = `depth:${symbol}:${side.toLowerCase()}`;
+    const redis = this.redisService.getClient();
     
     try {
-      await this.redis.watch(key);
+      await redis.watch(key);
       
       // 获取当前价格层级的数量
-      const currentAmount = parseFloat(await this.redis.hget(key, price.toString()) || '0');
+      const currentAmount = parseFloat(await redis.hget(key, price.toString()) || '0');
       const newAmount = Math.max(0, currentAmount + amount);
 
       if (newAmount === 0) {
         // 如果数量为0，删除该价格层级
-        await this.redis.hdel(key, price.toString());
+        await redis.hdel(key, price.toString());
       } else {
         // 更新价格层级的数量
-        await this.redis.hset(key, price.toString(), newAmount.toString());
+        await redis.hset(key, price.toString(), newAmount.toString());
       }
 
       // 获取更新后的深度数据
@@ -50,113 +51,104 @@ export class DepthService {
         price,
         amount: newAmount,
         depth,
-        timestamp: Date.now(),
       });
 
-      await this.redis.exec();
     } catch (error) {
-      this.logger.error(`Error updating depth for ${symbol}: ${error.message}`, error.stack);
+      this.logger.error(`Failed to update depth: ${error.message}`);
       throw error;
     } finally {
-      await this.redis.unwatch();
+      await redis.unwatch();
     }
   }
 
-  async getDepth(symbol: string): Promise<{
-    bids: OrderBookLevel[];
-    asks: OrderBookLevel[];
-  }> {
-    const [bids, asks] = await Promise.all([
-      this.getDepthSide(symbol, 'BUY'),
-      this.getDepthSide(symbol, 'SELL'),
-    ]);
+  async getDepth(symbol: string): Promise<{ bids: OrderBookLevel[]; asks: OrderBookLevel[] }> {
+    const redis = this.redisService.getClient();
+    const buyKey = `depth:${symbol}:buy`;
+    const sellKey = `depth:${symbol}:sell`;
 
-    return { bids, asks };
-  }
+    try {
+      const [buyOrders, sellOrders] = await Promise.all([
+        redis.hgetall(buyKey),
+        redis.hgetall(sellKey),
+      ]);
 
-  private async getDepthSide(symbol: string, side: 'BUY' | 'SELL'): Promise<OrderBookLevel[]> {
-    const key = `depth:${symbol}:${side.toLowerCase()}`;
-    const depthData = await this.redis.hgetall(key);
-    
-    const levels = Object.entries(depthData)
-      .map(([price, amount]) => ({
-        price: parseFloat(price),
-        amount: parseFloat(amount),
-        total: 0, // Will be calculated below
-        orders: 0, // Will be updated from database
-      }))
-      .sort((a, b) => side === 'BUY' ? b.price - a.price : a.price - b.price)
-      .slice(0, this.depthLevels);
+      const bids = Object.entries(buyOrders)
+        .map(([price, amount]) => ({
+          price: parseFloat(price),
+          amount: parseFloat(amount),
+          orders: 0,
+          total: 0, // Will be calculated below
+        }))
+        .sort((a, b) => b.price - a.price)
+        .slice(0, this.depthLevels);
 
-    // Calculate running total
-    let runningTotal = 0;
-    levels.forEach(level => {
-      runningTotal += level.amount;
-      level.total = runningTotal;
-    });
+      const asks = Object.entries(sellOrders)
+        .map(([price, amount]) => ({
+          price: parseFloat(price),
+          amount: parseFloat(amount),
+          orders: 0,
+          total: 0, // Will be calculated below
+        }))
+        .sort((a, b) => a.price - b.price)
+        .slice(0, this.depthLevels);
 
-    // Get order counts from database
-    const orderCounts = await this.prisma.order.groupBy({
-      by: ['price'],
-      where: {
-        symbol,
-        side,
-        status: { in: ['OPEN', 'PARTIALLY_FILLED'] },
-        price: { in: levels.map(l => l.price) },
-      },
-      _count: { id: true },
-    });
+      // Calculate running totals
+      let bidTotal = 0;
+      bids.forEach(bid => {
+        bidTotal += bid.amount;
+        bid.total = bidTotal;
+      });
 
-    // Update order counts
-    const orderCountMap = new Map(
-      orderCounts.map(count => [count.price, count._count.id])
-    );
-    
-    levels.forEach(level => {
-      level.orders = orderCountMap.get(level.price) || 0;
-    });
+      let askTotal = 0;
+      asks.forEach(ask => {
+        askTotal += ask.amount;
+        ask.total = askTotal;
+      });
 
-    return levels;
+      // 获取每个价格层级的订单数量
+      const orderCountMap = new Map<number, number>();
+      const orders = await this.prisma.order.groupBy({
+        by: ['price'],
+        _count: {
+          id: true,
+        },
+        where: {
+          symbol,
+          status: 'OPEN',
+        },
+      });
+
+      orders.forEach((order) => {
+        orderCountMap.set(order.price, order._count.id);
+      });
+
+      // 更新订单数量
+      [...bids, ...asks].forEach((level) => {
+        level.orders = orderCountMap.get(level.price) ?? 0;
+      });
+
+      return { bids, asks };
+    } catch (error) {
+      this.logger.error(`Failed to get depth: ${error.message}`);
+      throw error;
+    }
   }
 
   @OnEvent('trade.executed')
-  async handleTradeExecuted(trade: any) {
-    // 更新买卖双方的深度数据
-    await Promise.all([
-      this.updateDepth(
-        trade.symbol,
-        trade.takerSide,
-        trade.price,
-        -trade.amount
-      ),
-      this.updateDepth(
-        trade.symbol,
-        trade.takerSide === 'BUY' ? 'SELL' : 'BUY',
-        trade.price,
-        -trade.amount
-      ),
-    ]);
+  async handleTradeExecuted(event: any) {
+    const { symbol, side, price, amount } = event;
+    await this.updateDepth(symbol, side, price, -amount); // 减少深度
   }
 
   @OnEvent('order.canceled')
-  async handleOrderCanceled(order: any) {
-    await this.updateDepth(
-      order.symbol,
-      order.side,
-      order.price,
-      -order.remainingAmount
-    );
+  async handleOrderCanceled(event: any) {
+    const { symbol, side, price, amount } = event;
+    await this.updateDepth(symbol, side, price, -amount); // 减少深度
   }
 
   @OnEvent('order.created')
-  async handleOrderCreated(order: any) {
-    if (order.type === 'LIMIT') {
-      await this.updateDepth(
-        order.symbol,
-        order.side,
-        order.price,
-        order.amount
-      );
-    }
+  async handleOrderCreated(event: any) {
+    const { symbol, side, price, amount } = event;
+    await this.updateDepth(symbol, side, price, amount); // 增加深度
   }
 }

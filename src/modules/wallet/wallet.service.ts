@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { TwoFactorService } from '../auth/services/two-factor.service';
@@ -12,13 +12,17 @@ import {
   ExportTransactionsDto,
   TransactionType,
 } from './dto/wallet.dto';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 
 @Injectable()
 export class WalletService {
+  private readonly logger = new Logger(WalletService.name);
+
   constructor(
-    private prisma: PrismaService,
-    private twoFactorService: TwoFactorService,
-    private configService: ConfigService,
+    private readonly prisma: PrismaService,
+    private readonly twoFactorService: TwoFactorService,
+    private readonly configService: ConfigService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async getBalance(userId: number) {
@@ -145,6 +149,109 @@ export class WalletService {
     } else {
       await this.exportToExcel(res, transactions);
     }
+  }
+
+  async getWallet(userId: string) {
+    const wallet = await this.prisma.wallet.findFirst({
+      where: { userId },
+      include: { balances: true },
+    });
+
+    if (!wallet) {
+      throw new Error('Wallet not found');
+    }
+
+    return wallet;
+  }
+
+  async getBalance(walletId: string, currency: string) {
+    const balance = await this.prisma.walletBalance.findFirst({
+      where: { walletId, currency },
+    });
+
+    if (!balance) {
+      return {
+        available: '0',
+        locked: '0',
+        total: '0',
+      };
+    }
+
+    return {
+      available: balance.available.toString(),
+      locked: balance.locked.toString(),
+      total: balance.available.add(balance.locked).toString(),
+    };
+  }
+
+  async updateBalance(walletId: string, currency: string, amount: string, type: 'increment' | 'decrement') {
+    const balance = await this.prisma.walletBalance.findFirst({
+      where: { walletId, currency },
+    });
+
+    if (!balance) {
+      if (type === 'decrement') {
+        throw new Error('Insufficient balance');
+      }
+
+      await this.prisma.walletBalance.create({
+        data: {
+          walletId,
+          currency,
+          available: amount,
+        },
+      });
+      return;
+    }
+
+    const newAmount = type === 'increment' 
+      ? balance.available.add(amount)
+      : balance.available.sub(amount);
+
+    if (newAmount.isNegative()) {
+      throw new Error('Insufficient balance');
+    }
+
+    await this.prisma.walletBalance.update({
+      where: { id: balance.id },
+      data: { available: newAmount },
+    });
+  }
+
+  async lockBalance(walletId: string, currency: string, amount: string) {
+    const balance = await this.prisma.walletBalance.findFirst({
+      where: { walletId, currency },
+    });
+
+    if (!balance || balance.available.lt(amount)) {
+      throw new Error('Insufficient balance');
+    }
+
+    await this.prisma.walletBalance.update({
+      where: { id: balance.id },
+      data: {
+        available: balance.available.sub(amount),
+        locked: balance.locked.add(amount),
+      },
+    });
+  }
+
+  async unlockBalance(walletId: string, currency: string, amount: string) {
+    const balance = await this.prisma.walletBalance.findFirst({
+      where: { walletId, currency },
+    });
+
+    if (!balance || balance.locked.lt(amount)) {
+      throw new Error('Invalid locked amount');
+    }
+
+    await this.prisma.walletBalance.update({
+      where: { id: balance.id },
+      data: {
+        available: balance.available.add(amount),
+        locked: balance.locked.sub(amount),
+      },
+    });
   }
 
   private async getBalanceByCurrency(userId: number, currency: string): Promise<number> {
@@ -319,4 +426,4 @@ export class WalletService {
 
     await workbook.xlsx.write(res);
   }
-} 
+}

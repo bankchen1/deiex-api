@@ -13,14 +13,15 @@ datasource db {
 model User {
   id                String    @id @default(uuid())
   email            String    @unique
+  name             String?
   password         String
+  twoFactorSecret  String?
   username         String    @unique
   role             String    @default("user")
   isActive         Boolean   @default(true)
   status           String    @default("ACTIVE") // ACTIVE, DISABLED, SUSPENDED
   emailVerified    Boolean   @default(false)
   twoFactorEnabled Boolean   @default(false)
-  twoFactorSecret  String?
   lastLoginAt      DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
@@ -33,8 +34,11 @@ model User {
   trades          Trade[]
   notifications   Notification[]
   apiKeys         ApiKey[]
-  wallets         Wallet[]
+  wallet          Wallet?
   transactions    Transaction[]
+  followings      CopyTrading[] @relation("Follower")
+  followers       CopyTrading[] @relation("Trader")
+  traderStats     TraderStats?
 }
 
 model Strategy {
@@ -81,18 +85,15 @@ model Position {
 }
 
 model Balance {
-  id        String   @id @default(uuid())
-  asset     String
-  free      Decimal
-  locked    Decimal
-  total     Decimal  @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          String   @id @default(uuid())
+  userId      String
+  currency    String
+  amount      Decimal  @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  // 关联
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
-  transactions Transaction[]
+  // Relations
+  user        User     @relation(fields: [userId], references: [id])
 }
 
 model Symbol {
@@ -120,17 +121,18 @@ model Symbol {
 }
 
 model Kline {
-  id        String   @id @default(uuid())
-  symbol    String
-  interval  String
-  timestamp DateTime
-  open      Decimal
-  high      Decimal
-  low       Decimal
-  close     Decimal
-  volume    Decimal
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          String    @id @default(uuid())
+  symbol      String
+  interval    String
+  openTime    DateTime
+  open        Decimal
+  high        Decimal
+  low         Decimal
+  close       Decimal
+  volume      Decimal
+  timestamp   DateTime
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   // 关联
   symbolRef Symbol  @relation(fields: [symbol], references: [name])
@@ -209,36 +211,36 @@ model ApiKey {
 }
 
 model Wallet {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
+  userId      String    @unique
   address     String
   chain       String   // ETH, BSC, etc.
   isDefault   Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   // 关联
-  userId      String
   user        User     @relation(fields: [userId], references: [id])
   transactions Transaction[]
+  balances    WalletBalance[]
+  walletTransactions WalletTransaction[]
 }
 
 model Transaction {
   id          String   @id @default(uuid())
-  type        String   // DEPOSIT, WITHDRAWAL
-  amount      Decimal
+  userId      String
+  walletId    String
+  type        String   // DEPOSIT, WITHDRAWAL, TRADE
   status      String   // PENDING, COMPLETED, FAILED
-  txHash      String?
+  amount      Decimal
+  currency    String
+  fee         Decimal?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-  completedAt DateTime?
 
-  // 关联
-  userId      String
+  // Relations
   user        User     @relation(fields: [userId], references: [id])
-  walletId    String
   wallet      Wallet   @relation(fields: [walletId], references: [id])
-  balanceId   String
-  balance     Balance  @relation(fields: [balanceId], references: [id])
 }
 
 model Backtest {
@@ -258,4 +260,116 @@ model Backtest {
   // 关联
   strategyId   String
   strategy     Strategy @relation(fields: [strategyId], references: [id])
+}
+
+model CopyTrading {
+  id            String    @id @default(uuid())
+  followerId    String
+  traderId      String
+  status        String    // ACTIVE, PAUSED, STOPPED
+  leverage      Decimal
+  maxAmount     Decimal
+  copyPercentage Decimal  @default(100)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // 关联
+  follower      User     @relation("Follower", fields: [followerId], references: [id])
+  trader        User     @relation("Trader", fields: [traderId], references: [id])
+  history       CopyTradingHistory[]
+
+  @@unique([followerId, traderId])
+}
+
+model CopyTradingHistory {
+  id            String   @id @default(uuid())
+  type          String   // COPY_OPEN, COPY_CLOSE
+  status        String   // SUCCESS, FAILED
+  sourceOrderId String
+  targetOrderId String?
+  errorMessage  String?
+  symbol        String
+  amount        Decimal
+  profit        Decimal  @default(0)
+  copyTime      DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  // 关联
+  copyTradingId String
+  copyTrading   CopyTrading @relation(fields: [copyTradingId], references: [id])
+}
+
+model TraderStats {
+  id            String   @id @default(uuid())
+  traderId      String   @unique
+  totalTrades   Int      @default(0)
+  winRate       Decimal  @default(0)
+  pnl           Decimal  @default(0)
+  followers     Int      @default(0)
+  totalProfit   Decimal  @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // 关联
+  trader        User     @relation(fields: [traderId], references: [id])
+}
+
+model WalletTransaction {
+  id          String    @id @default(uuid())
+  userId      String
+  walletId    String
+  type        String    // DEPOSIT, WITHDRAWAL
+  status      String    // PENDING, COMPLETED, FAILED
+  amount      Decimal
+  currency    String
+  txHash      String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  wallet      Wallet    @relation(fields: [walletId], references: [id])
+}
+
+model WalletBalance {
+  id          String    @id @default(uuid())
+  walletId    String
+  currency    String
+  available   Decimal   @default(0)
+  locked      Decimal   @default(0)
+  totalDeposit Decimal  @default(0)
+  totalWithdraw Decimal @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  wallet      Wallet    @relation(fields: [walletId], references: [id])
+}
+
+model TradingPair {
+  id          String    @id @default(uuid())
+  symbol      String    @unique
+  baseAsset   String
+  quoteAsset  String
+  status      String    // TRADING, BREAK, HALT
+  minPrice    Decimal
+  maxPrice    Decimal
+  tickSize    Decimal
+  minQty      Decimal
+  maxQty      Decimal
+  stepSize    Decimal
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model Ticker {
+  id                  String   @id @default(uuid())
+  symbol              String   @unique
+  price               Decimal
+  priceChange         Decimal
+  priceChangePercent  Decimal
+  volume              Decimal
+  quoteVolume         Decimal
+  high                Decimal
+  low                 Decimal
+  openPrice           Decimal
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([symbol])
 }

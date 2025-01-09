@@ -19,8 +19,11 @@ jobs:
     - name: Install Dependencies
       run: npm install
       
-    - name: Build
+    - name: Type Check
       run: npm run build
+      
+    - name: Run Tests
+      run: npm run test
       
     - name: Deploy to Digital Ocean
       env:
@@ -49,7 +52,14 @@ jobs:
         ssh-keyscan -H $DEPLOY_HOST >> ~/.ssh/known_hosts
         
         # Copy files to server
-        rsync -avz --delete ./ root@$DEPLOY_HOST:/root/deiex-api/
+        rsync -avz --exclude 'node_modules' --exclude '.git' ./ root@$DEPLOY_HOST:/var/www/deiex-api/
         
-        # Run setup script
-        ssh root@$DEPLOY_HOST "cd /root/deiex-api && DB_PASSWORD='$DB_PASSWORD' REDIS_PASSWORD='$REDIS_PASSWORD' JWT_SECRET='$JWT_SECRET' bash scripts/setup-server.sh"
+        # Deploy script
+        cat << 'SCRIPT' | ssh root@$DEPLOY_HOST bash
+          cd /var/www/deiex-api
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+          npm install
+          npm run build
+          pm2 restart deiex-api || pm2 start dist/main.js --name deiex-api
+        SCRIPT

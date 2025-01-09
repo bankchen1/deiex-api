@@ -333,6 +333,21 @@ export class AuthService {
     await this.mailService.sendPasswordResetEmail(email, resetToken);
   }
 
+  async enable2FA(userId: string, enable2FADto: any) {
+    // Implementation for enabling 2FA
+    throw new Error('Not implemented');
+  }
+
+  async configure2FA(userId: string, enable2FADto: any) {
+    // Implementation for configuring 2FA
+    throw new Error('Not implemented');
+  }
+
+  async verify2FA(userId: string, code: string) {
+    // Implementation for verifying 2FA
+    throw new Error('Not implemented');
+  }
+
   private generateToken(userId: string): string {
     const jti = uuidv4(); // 生成唯一的 token ID
     return this.jwtService.sign(
