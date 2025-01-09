@@ -1,273 +1,282 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { MarketService } from '../market/market.service';
-import { StrategyFactory, StrategyType } from './strategy.factory';
-import { BaseStrategyParameters } from './types/strategy-parameters.type';
-import { BaseStrategy } from './templates/base-strategy';
-import { Kline } from './types/kline.type';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { InjectRedis } from '@liaoliaots/nestjs-redis';
+import { Redis } from 'ioredis';
+import {
+  CreateStrategyDto,
+  UpdateStrategyDto,
+  StrategyStatus,
+  StrategyPerformanceDto,
+  BacktestDto,
+  StrategySubscriptionDto,
+} from './dto/strategy.dto';
 
 @Injectable()
 export class StrategyService {
-  private activeStrategies: Map<string, BaseStrategy> = new Map();
-
   constructor(
     private readonly prisma: PrismaService,
-    private readonly marketService: MarketService,
-    private readonly strategyFactory: StrategyFactory,
+    private readonly eventEmitter: EventEmitter2,
+    @InjectRedis() private readonly redis: Redis,
   ) {}
 
-  async createStrategy(
-    type: StrategyType,
-    parameters: BaseStrategyParameters,
-  ): Promise<BaseStrategy> {
-    // 验证参数
-    this.strategyFactory.validateParameters(type, parameters);
-
-    // 创建策略实例
-    const strategy = this.strategyFactory.createStrategy(type, parameters);
-
-    // 保存策略到数据库
-    await this.prisma.strategy.create({
+  async create(userId: string, dto: CreateStrategyDto) {
+    return await this.prisma.strategy.create({
       data: {
-        name: parameters.name,
-        description: parameters.description,
-        type,
-        symbol: parameters.symbol,
-        interval: parameters.interval,
-        parameters: parameters as any,
-        isActive: true,
+        userId,
+        name: dto.name,
+        description: dto.description,
+        symbol: dto.symbol,
+        parameters: dto.parameters,
+        status: StrategyStatus.INACTIVE,
       },
     });
-
-    // 将策略添加到活动策略列表
-    this.activeStrategies.set(parameters.name, strategy);
-
-    return strategy;
   }
 
-  async updateStrategy(
-    id: string,
-    type: StrategyType,
-    parameters: BaseStrategyParameters,
-  ): Promise<BaseStrategy> {
-    // 验证参数
-    this.strategyFactory.validateParameters(type, parameters);
-
-    // 检查策略是否存在
-    const existingStrategy = await this.prisma.strategy.findUnique({
-      where: { id },
-    });
-
-    if (!existingStrategy) {
-      throw new Error('策略不存在');
-    }
-
-    // 创建新的策略实例
-    const strategy = this.strategyFactory.createStrategy(type, parameters);
-
-    // 更新数据库中的策略
-    await this.prisma.strategy.update({
-      where: { id },
-      data: {
-        name: parameters.name,
-        description: parameters.description,
-        type,
-        symbol: parameters.symbol,
-        interval: parameters.interval,
-        parameters: parameters as any,
-      },
-    });
-
-    // 更新活动策略列表
-    this.activeStrategies.set(parameters.name, strategy);
-
-    return strategy;
-  }
-
-  async deleteStrategy(id: string): Promise<void> {
-    // 检查策略是否存在
-    const strategy = await this.prisma.strategy.findUnique({
-      where: { id },
-    });
-
-    if (!strategy) {
-      throw new Error('策略不存在');
-    }
-
-    // 从活动策略列表中移除
-    this.activeStrategies.delete(strategy.name);
-
-    // 从数据库中删除
-    await this.prisma.strategy.delete({
-      where: { id },
-    });
-  }
-
-  async getStrategy(id: string): Promise<BaseStrategy> {
-    // 从数据库中获取策略
-    const strategy = await this.prisma.strategy.findUnique({
-      where: { id },
-    });
-
-    if (!strategy) {
-      throw new Error('策略不存在');
-    }
-
-    // 如果策略已经在活动列表中，直接返回
-    if (this.activeStrategies.has(strategy.name)) {
-      return this.activeStrategies.get(strategy.name)!;
-    }
-
-    // 创建新的策略实例
-    const newStrategy = this.strategyFactory.createStrategy(
-      strategy.type as StrategyType,
-      strategy.parameters as BaseStrategyParameters,
-    );
-
-    // 添加到活动策略列表
-    this.activeStrategies.set(strategy.name, newStrategy);
-
-    return newStrategy;
-  }
-
-  async getAllStrategies(): Promise<BaseStrategy[]> {
-    // 从数据库中获取所有策略
-    const strategies = await this.prisma.strategy.findMany();
-
-    // 将所有策略转换为策略实例
-    return strategies.map((strategy) => {
-      // 如果策略已经在活动列表中，直接返回
-      if (this.activeStrategies.has(strategy.name)) {
-        return this.activeStrategies.get(strategy.name)!;
-      }
-
-      // 创建新的策略实例
-      const newStrategy = this.strategyFactory.createStrategy(
-        strategy.type as StrategyType,
-        strategy.parameters as BaseStrategyParameters,
-      );
-
-      // 添加到活动策略列表
-      this.activeStrategies.set(strategy.name, newStrategy);
-
-      return newStrategy;
-    });
-  }
-
-  async executeStrategy(id: string): Promise<void> {
-    // 获取策略实例
-    const strategy = await this.getStrategy(id);
-
-    // 获取策略参数
-    const dbStrategy = await this.prisma.strategy.findUnique({
-      where: { id },
-    });
-
-    if (!dbStrategy) {
-      throw new Error('策略不存在');
-    }
-
-    const parameters = dbStrategy.parameters as BaseStrategyParameters;
-
-    // 获取历史K线数据
-    const historicalKlines = await this.marketService.getKlines(
-      parameters.symbol,
-      parameters.interval,
-      100, // 获取足够的历史数据用于计算指标
-    );
-
-    // 获取当前K线数据
-    const currentKline = historicalKlines[historicalKlines.length - 1];
-
-    // 生成交易信号
-    const signal = await strategy.generateSignal(
-      currentKline as Kline,
-      historicalKlines as Kline[],
-    );
-
-    if (signal) {
-      // 获取当前持仓
-      const position = await this.prisma.position.findFirst({
-        where: {
-          strategyId: id,
-          status: 'OPEN',
-        },
-      });
-
-      if (position) {
-        // 检查是否应该平仓
-        const shouldExit = await strategy.shouldExit(currentKline as Kline, {
-          side: position.side,
-          entryPrice: Number(position.entryPrice),
-          stopLoss: position.stopLoss ? Number(position.stopLoss) : undefined,
-          takeProfit: position.takeProfit ? Number(position.takeProfit) : undefined,
-        });
-
-        if (shouldExit) {
-          // 执行平仓操作
-          await this.closePosition(position.id, Number(currentKline.close));
-        }
-      } else {
-        // 计算仓位大小
-        const equity = await this.getAvailableEquity(parameters.symbol);
-        const size = await strategy.calculatePositionSize(equity, signal.price);
-
-        // 开新仓位
-        await this.openPosition(id, signal, size);
-      }
-    }
-  }
-
-  private async getAvailableEquity(symbol: string): Promise<number> {
-    // 获取账户余额
-    const balance = await this.prisma.balance.findFirst({
+  async update(userId: string, strategyId: string, dto: UpdateStrategyDto) {
+    const strategy = await this.prisma.strategy.findFirst({
       where: {
-        asset: symbol.split('/')[1], // 获取计价货币
+        id: strategyId,
+        userId,
       },
     });
 
-    if (!balance) {
-      throw new Error('没有可用余额');
+    if (!strategy) {
+      throw new NotFoundException('Strategy not found');
     }
 
-    return Number(balance.free);
+    return await this.prisma.strategy.update({
+      where: { id: strategyId },
+      data: {
+        name: dto.name,
+        description: dto.description,
+        status: dto.status,
+        parameters: dto.parameters,
+      },
+    });
   }
 
-  private async openPosition(
-    strategyId: string,
-    signal: {
-      side: 'BUY' | 'SELL';
-      type: 'MARKET' | 'LIMIT';
-      price: number;
-      stopLoss?: number;
-      takeProfit?: number;
-    },
-    size: number,
-  ): Promise<void> {
-    // 创建新的仓位记录
-    await this.prisma.position.create({
+  async delete(userId: string, strategyId: string) {
+    const strategy = await this.prisma.strategy.findFirst({
+      where: {
+        id: strategyId,
+        userId,
+      },
+    });
+
+    if (!strategy) {
+      throw new NotFoundException('Strategy not found');
+    }
+
+    if (strategy.status === StrategyStatus.ACTIVE) {
+      throw new BadRequestException('Cannot delete active strategy');
+    }
+
+    await this.prisma.strategy.delete({
+      where: { id: strategyId },
+    });
+  }
+
+  async findOne(userId: string, strategyId: string) {
+    const strategy = await this.prisma.strategy.findFirst({
+      where: {
+        id: strategyId,
+        userId,
+      },
+    });
+
+    if (!strategy) {
+      throw new NotFoundException('Strategy not found');
+    }
+
+    return strategy;
+  }
+
+  async findAll(userId: string) {
+    return await this.prisma.strategy.findMany({
+      where: {
+        userId,
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+  }
+
+  async getPerformance(userId: string, strategyId: string): Promise<StrategyPerformanceDto> {
+    const strategy = await this.findOne(userId, strategyId);
+
+    const trades = await this.prisma.strategyTrade.findMany({
+      where: {
+        strategyId,
+      },
+    });
+
+    const followers = await this.prisma.strategySubscription.count({
+      where: {
+        strategyId,
+      },
+    });
+
+    const runningDays = Math.ceil(
+      (Date.now() - strategy.createdAt.getTime()) / (1000 * 60 * 60 * 24),
+    );
+
+    const profits = trades.map(t => Number(t.profit));
+    const totalReturn = profits.reduce((sum, p) => sum + p, 0);
+    const winningTrades = trades.filter(t => Number(t.profit) > 0);
+    const winRate = trades.length > 0 ? (winningTrades.length / trades.length) * 100 : 0;
+
+    // Calculate max drawdown
+    let maxDrawdown = 0;
+    let peak = 0;
+    let balance = 0;
+    for (const profit of profits) {
+      balance += profit;
+      if (balance > peak) {
+        peak = balance;
+      }
+      const drawdown = ((peak - balance) / peak) * 100;
+      if (drawdown > maxDrawdown) {
+        maxDrawdown = drawdown;
+      }
+    }
+
+    // Calculate monthly return
+    const monthlyTrades = trades.filter(
+      t => t.createdAt > new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+    );
+    const monthlyReturn = monthlyTrades.reduce((sum, t) => sum + Number(t.profit), 0);
+
+    return {
+      totalReturn,
+      monthlyReturn,
+      maxDrawdown,
+      winRate,
+      followers,
+      runningDays,
+    };
+  }
+
+  async runBacktest(userId: string, strategyId: string, dto: BacktestDto) {
+    const strategy = await this.findOne(userId, strategyId);
+
+    // TODO: Implement actual backtesting logic
+    const backtestResult = {
+      trades: [],
+      performance: {
+        totalReturn: 0,
+        maxDrawdown: 0,
+        winRate: 0,
+        sharpeRatio: 0,
+      },
+    };
+
+    await this.prisma.backtest.create({
       data: {
         strategyId,
-        side: signal.side,
-        type: signal.type,
-        size: size,
-        entryPrice: signal.price,
-        stopLoss: signal.stopLoss,
-        takeProfit: signal.takeProfit,
-        status: 'OPEN',
+        startTime: dto.startTime,
+        endTime: dto.endTime,
+        initialCapital: dto.initialCapital,
+        symbol: dto.symbol,
+        parameters: dto.parameters,
+        result: backtestResult,
+      },
+    });
+
+    return backtestResult;
+  }
+
+  async subscribe(userId: string, dto: StrategySubscriptionDto) {
+    const strategy = await this.prisma.strategy.findUnique({
+      where: { id: dto.strategyId },
+    });
+
+    if (!strategy) {
+      throw new NotFoundException('Strategy not found');
+    }
+
+    if (strategy.userId === userId) {
+      throw new BadRequestException('Cannot subscribe to your own strategy');
+    }
+
+    if (strategy.status !== StrategyStatus.ACTIVE) {
+      throw new BadRequestException('Strategy is not active');
+    }
+
+    const existingSubscription = await this.prisma.strategySubscription.findUnique({
+      where: {
+        userId_strategyId: {
+          userId,
+          strategyId: dto.strategyId,
+        },
+      },
+    });
+
+    if (existingSubscription) {
+      throw new BadRequestException('Already subscribed to this strategy');
+    }
+
+    return await this.prisma.strategySubscription.create({
+      data: {
+        userId,
+        strategyId: dto.strategyId,
+        copyRatio: dto.copyRatio,
+        maxLossPercentage: dto.maxLossPercentage,
       },
     });
   }
 
-  private async closePosition(positionId: string, exitPrice: number): Promise<void> {
-    // 更新仓位状态
-    await this.prisma.position.update({
-      where: { id: positionId },
-      data: {
-        exitPrice,
-        status: 'CLOSED',
-        closedAt: new Date(),
+  async unsubscribe(userId: string, strategyId: string) {
+    const subscription = await this.prisma.strategySubscription.findUnique({
+      where: {
+        userId_strategyId: {
+          userId,
+          strategyId,
+        },
+      },
+    });
+
+    if (!subscription) {
+      throw new NotFoundException('Subscription not found');
+    }
+
+    await this.prisma.strategySubscription.delete({
+      where: {
+        userId_strategyId: {
+          userId,
+          strategyId,
+        },
       },
     });
   }
-} 
+
+  async getSubscriptions(userId: string) {
+    return await this.prisma.strategySubscription.findMany({
+      where: {
+        userId,
+      },
+      include: {
+        strategy: true,
+      },
+    });
+  }
+
+  async getSubscribers(userId: string, strategyId: string) {
+    const strategy = await this.findOne(userId, strategyId);
+
+    return await this.prisma.strategySubscription.findMany({
+      where: {
+        strategyId,
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            username: true,
+          },
+        },
+      },
+    });
+  }
+}

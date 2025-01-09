@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNumber, IsEnum, IsOptional, Min, Max, IsArray, IsBoolean } from 'class-validator';
+import { IsString, IsNumber, IsEnum, IsArray, IsBoolean } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export enum KlineInterval {
@@ -14,160 +14,269 @@ export enum KlineInterval {
   ONE_MONTH = '1M'
 }
 
-export class MarketOverviewDto {
-  @ApiProperty({
-    description: 'Bitcoin market data',
-    type: () => ({
-      price: Number,
-      volume24h: Number,
-      priceChange24h: Number,
-    }),
-  })
-  btc: {
-    price: number;
-    volume24h: number;
-    priceChange24h: number;
-  };
+export class MarketEventData {
+  @ApiProperty({ enum: ['depth', 'kline', 'ticker', 'trade'] })
+  @IsEnum(['depth', 'kline', 'ticker', 'trade'])
+  type: 'depth' | 'kline' | 'ticker' | 'trade';
 
-  @ApiProperty({
-    description: 'Ethereum market data',
-    type: () => ({
-      price: Number,
-      volume24h: Number,
-      priceChange24h: Number,
-    }),
-  })
-  eth: {
-    price: number;
-    volume24h: number;
-    priceChange24h: number;
-  };
+  @ApiProperty()
+  @IsString()
+  symbol: string;
 
-  @ApiProperty({ description: 'Timestamp of the data' })
+  @ApiProperty()
+  data: OrderBookDto | KlineDto | TickerDto | TradeDto;
+
+  @ApiProperty()
   @IsNumber()
   timestamp: number;
 }
 
 export class TickerDto {
-  @ApiProperty({ description: 'Trading pair symbol' })
+  @ApiProperty()
   @IsString()
   symbol: string;
 
-  @ApiProperty({ description: 'Current price' })
+  @ApiProperty()
   @IsString()
   price: string;
 
-  @ApiProperty({ description: 'Price change' })
+  @ApiProperty()
   @IsString()
   priceChange: string;
 
-  @ApiProperty({ description: 'Price change percent' })
+  @ApiProperty()
   @IsString()
   priceChangePercent: string;
 
-  @ApiProperty({ description: 'Trading volume' })
+  @ApiProperty()
   @IsString()
   volume: string;
 
-  @ApiProperty({ description: 'Quote asset volume' })
+  @ApiProperty()
   @IsString()
   quoteVolume: string;
 
-  @ApiProperty({ description: '24h high price' })
+  @ApiProperty()
   @IsString()
   high: string;
 
-  @ApiProperty({ description: '24h low price' })
+  @ApiProperty()
   @IsString()
   low: string;
 
-  @ApiProperty({ description: 'Data timestamp' })
+  @ApiProperty()
+  @IsString()
+  openPrice: string;
+
+  @ApiProperty()
   @IsNumber()
   timestamp: number;
 }
 
 export class OrderBookDto {
-  @ApiProperty({ description: 'Trading pair symbol' })
+  @ApiProperty()
   @IsString()
   symbol: string;
 
-  @ApiProperty({ description: 'Bid orders', type: [Array] })
+  @ApiProperty()
+  @IsNumber()
+  lastUpdateId: number;
+
+  @ApiProperty({ type: [Array] })
   @IsArray()
   bids: [string, string][];
 
-  @ApiProperty({ description: 'Ask orders', type: [Array] })
+  @ApiProperty({ type: [Array] })
   @IsArray()
   asks: [string, string][];
 
-  @ApiProperty({ description: 'Last update ID' })
+  @ApiProperty()
   @IsNumber()
-  lastUpdateId: number;
+  timestamp: number;
 }
 
 export class KlineDto {
-  @ApiProperty({ description: 'Opening time' })
+  @ApiProperty()
+  @IsString()
+  symbol: string;
+
+  @ApiProperty()
+  @IsString()
+  interval: string;
+
+  @ApiProperty()
   @IsNumber()
   openTime: number;
 
-  @ApiProperty({ description: 'Opening price' })
+  @ApiProperty()
   @IsString()
   open: string;
 
-  @ApiProperty({ description: 'Highest price' })
+  @ApiProperty()
   @IsString()
   high: string;
 
-  @ApiProperty({ description: 'Lowest price' })
+  @ApiProperty()
   @IsString()
   low: string;
 
-  @ApiProperty({ description: 'Closing price' })
+  @ApiProperty()
   @IsString()
   close: string;
 
-  @ApiProperty({ description: 'Trading volume' })
+  @ApiProperty()
   @IsString()
   volume: string;
 
-  @ApiProperty({ description: 'Closing time' })
+  @ApiProperty()
   @IsNumber()
   closeTime: number;
 
-  @ApiProperty({ description: 'Quote asset volume' })
+  @ApiProperty()
   @IsString()
-  quoteAssetVolume: string;
+  quoteVolume: string;
 
-  @ApiProperty({ description: 'Number of trades' })
+  @ApiProperty()
   @IsNumber()
   trades: number;
 
-  @ApiProperty({ description: 'Taker buy base asset volume' })
+  @ApiProperty()
   @IsString()
-  takerBuyBaseAssetVolume: string;
+  takerBaseVolume: string;
 
-  @ApiProperty({ description: 'Taker buy quote asset volume' })
+  @ApiProperty()
   @IsString()
-  takerBuyQuoteAssetVolume: string;
+  takerQuoteVolume: string;
+
+  @ApiProperty()
+  @IsNumber()
+  timestamp: number;
 }
 
+export class TradeDto {
+  @ApiProperty()
+  @IsString()
+  symbol: string;
+
+  @ApiProperty()
+  @IsNumber()
+  id: number;
+
+  @ApiProperty()
+  @IsString()
+  price: string;
+
+  @ApiProperty()
+  @IsString()
+  quantity: string;
+
+  @ApiProperty()
+  @IsString()
+  quoteQuantity: string;
+
+  @ApiProperty()
+  @IsNumber()
+  time: number;
+
+  @ApiProperty()
+  @IsBoolean()
+  isBuyerMaker: boolean;
+
+  @ApiProperty()
+  @IsBoolean()
+  isBestMatch: boolean;
+
+  @ApiProperty()
+  @IsNumber()
+  timestamp: number;
+}
+
+export class MarketOverviewDto {
+  @ApiProperty()
+  btc: {
+    @ApiProperty()
+    @IsString()
+    price: string;
+
+    @ApiProperty()
+    @IsString()
+    priceChange: string;
+
+    @ApiProperty()
+    @IsString()
+    priceChangePercent: string;
+
+    @ApiProperty()
+    @IsString()
+    volume: string;
+  };
+
+  @ApiProperty()
+  eth: {
+    @ApiProperty()
+    @IsString()
+    price: string;
+
+    @ApiProperty()
+    @IsString()
+    priceChange: string;
+
+    @ApiProperty()
+    @IsString()
+    priceChangePercent: string;
+
+    @ApiProperty()
+    @IsString()
+    volume: string;
+  };
+}
+
+export class MarketStatusDto {
+  @ApiProperty({ type: [Object] })
+  @IsArray()
+  markets: Array<{
+    @ApiProperty()
+    @IsString()
+    symbol: string;
+
+    @ApiProperty({ enum: ['online', 'offline', 'maintenance'] })
+    @IsEnum(['online', 'offline', 'maintenance'])
+    status: 'online' | 'offline' | 'maintenance';
+
+    @ApiProperty()
+    @IsString()
+    baseAsset: string;
+
+    @ApiProperty()
+    @IsString()
+    quoteAsset: string;
+  }>;
+
+  @ApiProperty()
+  @IsNumber()
+  serverTime: number;
+}
+
+export class RecentTradeDto extends TradeDto {}
+
 export class KlineQueryDto {
-  @ApiProperty({ enum: KlineInterval, description: 'Kline/candlestick interval' })
+  @ApiProperty({ enum: KlineInterval })
   @IsEnum(KlineInterval)
   interval: KlineInterval;
 
-  @ApiProperty({ required: false, description: 'Start time in milliseconds' })
+  @ApiProperty()
   @IsOptional()
   @IsNumber()
   @Type(() => Number)
   startTime?: number;
 
-  @ApiProperty({ required: false, description: 'End time in milliseconds' })
+  @ApiProperty()
   @IsOptional()
   @IsNumber()
   @Type(() => Number)
   endTime?: number;
 
-  @ApiProperty({ required: false, description: 'Limit of results', default: 100 })
+  @ApiProperty()
   @IsOptional()
   @IsNumber()
   @Min(1)
@@ -177,7 +286,17 @@ export class KlineQueryDto {
 }
 
 export class OrderBookQueryDto {
-  @ApiProperty({ required: false, description: 'Limit of results', default: 100 })
+  @ApiProperty()
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(1000)
+  @Type(() => Number)
+  limit?: number;
+}
+
+export class TradesQueryDto {
+  @ApiProperty()
   @IsOptional()
   @IsNumber()
   @Min(1)
@@ -187,77 +306,23 @@ export class OrderBookQueryDto {
 }
 
 export class BookTickerDto {
-  @ApiProperty({ description: 'Trading pair symbol' })
+  @ApiProperty()
   @IsString()
   symbol: string;
 
-  @ApiProperty({ description: 'Best bid price' })
+  @ApiProperty()
   @IsString()
   bidPrice: string;
 
-  @ApiProperty({ description: 'Best bid quantity' })
+  @ApiProperty()
   @IsString()
   bidQty: string;
 
-  @ApiProperty({ description: 'Best ask price' })
+  @ApiProperty()
   @IsString()
   askPrice: string;
 
-  @ApiProperty({ description: 'Best ask quantity' })
+  @ApiProperty()
   @IsString()
   askQty: string;
-}
-
-export class RecentTradeDto {
-  @ApiProperty({ description: 'Trade ID' })
-  @IsString()
-  id: string;
-
-  @ApiProperty({ description: 'Trade price' })
-  @IsString()
-  price: string;
-
-  @ApiProperty({ description: 'Trade quantity' })
-  @IsString()
-  quantity: string;
-
-  @ApiProperty({ description: 'Trade timestamp' })
-  @IsNumber()
-  timestamp: number;
-
-  @ApiProperty({ description: 'Whether the buyer is the market maker' })
-  @IsBoolean()
-  isBuyerMaker: boolean;
-}
-
-export class MarketStatusDto {
-  @ApiProperty({
-    description: 'Market status information',
-    type: () => ({
-      symbol: String,
-      status: String,
-      lastUpdate: Number,
-    }),
-    isArray: true,
-  })
-  @IsArray()
-  markets: Array<{
-    symbol: string;
-    status: string;
-    lastUpdate: number;
-  }>;
-
-  @ApiProperty({ description: 'Server time' })
-  @IsNumber()
-  serverTime: number;
-}
-
-export class TradesQueryDto {
-  @ApiProperty({ required: false, description: 'Limit of results', default: 100 })
-  @IsOptional()
-  @IsNumber()
-  @Min(1)
-  @Max(1000)
-  @Type(() => Number)
-  limit?: number;
 }

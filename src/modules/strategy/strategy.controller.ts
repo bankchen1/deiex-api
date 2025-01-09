@@ -8,83 +8,150 @@ import {
   Param,
   UseGuards,
   Query,
+  HttpStatus,
+  HttpCode,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { User } from '../auth/decorators/user.decorator';
 import { StrategyService } from './strategy.service';
-import { StrategyFactory, StrategyType } from './strategy.factory';
-import { BaseStrategyParameters } from './types/strategy-parameters.type';
+import {
+  CreateStrategyDto,
+  UpdateStrategyDto,
+  StrategyPerformanceDto,
+  BacktestDto,
+  StrategySubscriptionDto,
+} from './dto/strategy.dto';
 
-@ApiTags('策略')
+@ApiTags('Strategy')
 @Controller('strategies')
 @UseGuards(JwtAuthGuard)
 export class StrategyController {
   constructor(
     private readonly strategyService: StrategyService,
-    private readonly strategyFactory: StrategyFactory,
   ) {}
 
   @Post()
-  @ApiOperation({ summary: '创建策略' })
-  @ApiResponse({ status: 201, description: '策略创建成功' })
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Create a new strategy' })
+  @ApiResponse({ status: HttpStatus.CREATED, type: CreateStrategyDto })
   async createStrategy(
-    @Body('type') type: StrategyType,
-    @Body('parameters') parameters: BaseStrategyParameters,
+    @User('id') userId: string,
+    @Body() dto: CreateStrategyDto,
   ) {
-    return this.strategyService.createStrategy(type, parameters);
+    return this.strategyService.create(userId, dto);
   }
 
-  @Put(':id')
-  @ApiOperation({ summary: '更新策略' })
-  @ApiResponse({ status: 200, description: '策略更新成功' })
+  @Put(':strategyId')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Update a strategy' })
+  @ApiParam({ name: 'strategyId', description: 'Strategy ID' })
+  @ApiResponse({ status: HttpStatus.OK, type: UpdateStrategyDto })
   async updateStrategy(
-    @Param('id') id: string,
-    @Body('type') type: StrategyType,
-    @Body('parameters') parameters: BaseStrategyParameters,
+    @User('id') userId: string,
+    @Param('strategyId') strategyId: string,
+    @Body() dto: UpdateStrategyDto,
   ) {
-    return this.strategyService.updateStrategy(id, type, parameters);
+    return this.strategyService.update(userId, strategyId, dto);
   }
 
-  @Delete(':id')
-  @ApiOperation({ summary: '删除策略' })
-  @ApiResponse({ status: 200, description: '策略删除成功' })
-  async deleteStrategy(@Param('id') id: string) {
-    return this.strategyService.deleteStrategy(id);
+  @Delete(':strategyId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Delete a strategy' })
+  @ApiParam({ name: 'strategyId', description: 'Strategy ID' })
+  @ApiResponse({ status: HttpStatus.NO_CONTENT })
+  async deleteStrategy(
+    @User('id') userId: string,
+    @Param('strategyId') strategyId: string,
+  ) {
+    await this.strategyService.delete(userId, strategyId);
   }
 
-  @Get(':id')
-  @ApiOperation({ summary: '获取策略详情' })
-  @ApiResponse({ status: 200, description: '获取策略成功' })
-  async getStrategy(@Param('id') id: string) {
-    return this.strategyService.getStrategy(id);
+  @Get(':strategyId')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Get strategy details' })
+  @ApiParam({ name: 'strategyId', description: 'Strategy ID' })
+  @ApiResponse({ status: HttpStatus.OK, type: CreateStrategyDto })
+  async getStrategy(
+    @User('id') userId: string,
+    @Param('strategyId') strategyId: string,
+  ) {
+    return this.strategyService.findOne(userId, strategyId);
   }
 
   @Get()
-  @ApiOperation({ summary: '获取所有策略' })
-  @ApiResponse({ status: 200, description: '获取策略列表成功' })
-  async getAllStrategies() {
-    return this.strategyService.getAllStrategies();
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Get all strategies' })
+  @ApiResponse({ status: HttpStatus.OK, type: [CreateStrategyDto] })
+  async getAllStrategies(@User('id') userId: string) {
+    return this.strategyService.findAll(userId);
   }
 
-  @Post(':id/execute')
-  @ApiOperation({ summary: '执行策略' })
-  @ApiResponse({ status: 200, description: '策略执行成功' })
-  async executeStrategy(@Param('id') id: string) {
-    return this.strategyService.executeStrategy(id);
+  @Get(':strategyId/performance')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Get strategy performance' })
+  @ApiParam({ name: 'strategyId', description: 'Strategy ID' })
+  @ApiResponse({ status: HttpStatus.OK, type: StrategyPerformanceDto })
+  async getPerformance(
+    @User('id') userId: string,
+    @Param('strategyId') strategyId: string,
+  ) {
+    return this.strategyService.getPerformance(userId, strategyId);
   }
 
-  @Get('types')
-  @ApiOperation({ summary: '获取所有策略类型' })
-  @ApiResponse({ status: 200, description: '获取策略类型列表成功' })
-  async getStrategyTypes() {
-    return this.strategyFactory.getStrategyTypes();
+  @Post(':strategyId/backtest')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Run strategy backtest' })
+  @ApiParam({ name: 'strategyId', description: 'Strategy ID' })
+  @ApiResponse({ status: HttpStatus.OK })
+  async runBacktest(
+    @User('id') userId: string,
+    @Param('strategyId') strategyId: string,
+    @Body() dto: BacktestDto,
+  ) {
+    return this.strategyService.runBacktest(userId, strategyId, dto);
   }
 
-  @Get('types/:type/parameters')
-  @ApiOperation({ summary: '获取策略类型的默认参数' })
-  @ApiResponse({ status: 200, description: '获取默认参数成功' })
-  async getDefaultParameters(@Param('type') type: StrategyType) {
-    return this.strategyFactory.getDefaultParameters(type);
+  @Post('subscribe')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Subscribe to a strategy' })
+  @ApiResponse({ status: HttpStatus.CREATED })
+  async subscribe(
+    @User('id') userId: string,
+    @Body() dto: StrategySubscriptionDto,
+  ) {
+    return this.strategyService.subscribe(userId, dto);
   }
-} 
+
+  @Delete('subscribe/:strategyId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Unsubscribe from a strategy' })
+  @ApiParam({ name: 'strategyId', description: 'Strategy ID' })
+  @ApiResponse({ status: HttpStatus.NO_CONTENT })
+  async unsubscribe(
+    @User('id') userId: string,
+    @Param('strategyId') strategyId: string,
+  ) {
+    await this.strategyService.unsubscribe(userId, strategyId);
+  }
+
+  @Get('subscriptions')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Get user subscriptions' })
+  @ApiResponse({ status: HttpStatus.OK })
+  async getSubscriptions(@User('id') userId: string) {
+    return this.strategyService.getSubscriptions(userId);
+  }
+
+  @Get(':strategyId/subscribers')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Get strategy subscribers' })
+  @ApiParam({ name: 'strategyId', description: 'Strategy ID' })
+  @ApiResponse({ status: HttpStatus.OK })
+  async getSubscribers(
+    @User('id') userId: string,
+    @Param('strategyId') strategyId: string,
+  ) {
+    return this.strategyService.getSubscribers(userId, strategyId);
+  }
+}

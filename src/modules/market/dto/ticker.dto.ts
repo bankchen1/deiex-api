@@ -1,30 +1,33 @@
 import { ApiProperty } from '@nestjs/swagger';
 
 export class TickerDto {
-  @ApiProperty({ description: 'Trading pair symbol' })
+  @ApiProperty({ description: '交易对符号' })
   symbol: string;
 
-  @ApiProperty({ description: 'Latest price' })
+  @ApiProperty({ description: '最新价格' })
   price: string;
 
-  @ApiProperty({ description: 'Price change' })
+  @ApiProperty({ description: '24小时价格变化' })
   priceChange: string;
 
-  @ApiProperty({ description: 'Price change percent' })
+  @ApiProperty({ description: '24小时价格变化百分比' })
   priceChangePercent: string;
 
-  @ApiProperty({ description: 'Trading volume in base asset' })
+  @ApiProperty({ description: '24小时成交量' })
   volume: string;
 
-  @ApiProperty({ description: 'Trading volume in quote asset' })
+  @ApiProperty({ description: '24小时成交额' })
   quoteVolume: string;
 
-  @ApiProperty({ description: 'Highest price in 24h' })
+  @ApiProperty({ description: '24小时最高价' })
   high: string;
 
-  @ApiProperty({ description: 'Lowest price in 24h' })
+  @ApiProperty({ description: '24小时最低价' })
   low: string;
 
-  @ApiProperty({ description: 'Open price 24h ago' })
+  @ApiProperty({ description: '24小时开盘价' })
   openPrice: string;
+
+  @ApiProperty({ description: '时间戳' })
+  timestamp: number;
 }

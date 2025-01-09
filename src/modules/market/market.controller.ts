@@ -76,6 +76,21 @@ export class MarketController {
   }
 
   @Public()
+  @Get('ticker/:symbol')
+  @ApiOperation({ summary: 'Get ticker information for a symbol' })
+  @ApiParam({ name: 'symbol', description: 'Trading pair symbol', example: 'BTC-USDT' })
+  async getTicker(@Param('symbol') symbol: string): Promise<TickerDto> {
+    return this.marketService.getTicker(symbol);
+  }
+
+  @Public()
+  @Get('tickers')
+  @ApiOperation({ summary: 'Get all tickers' })
+  async getTickers(): Promise<TickerDto[]> {
+    return this.marketService.getTickers();
+  }
+
+  @Public()
   @Get('ticker/book/:symbol')
   @ApiOperation({ summary: '获取指定交易对的最优挂单' })
   @ApiParam({ name: 'symbol', description: '交易对', example: 'BTC-USDT' })
@@ -119,37 +134,6 @@ export class MarketController {
   }
 
   @Public()
-  @Get('trades/:symbol')
-  @ApiOperation({ summary: '获取最近成交记录' })
-  @ApiParam({ name: 'symbol', description: '交易对', example: 'BTC-USDT' })
-  @ApiQuery({ name: 'limit', description: '获取数量', required: false, type: Number })
-  @ApiResponse({ status: 200, description: '获取成功', type: [RecentTradeDto] })
-  async getRecentTrades(
-    @Param('symbol') symbol: string,
-    @Query('limit', new DefaultValuePipe(100), ParseIntPipe) limit: number,
-  ): Promise<RecentTradeDto[]> {
-    if (limit > 1000) {
-      throw new BadRequestException('Limit cannot exceed 1000');
-    }
-    return this.marketService.getRecentTrades(symbol, limit);
-  }
-
-  @Public()
-  @Get('ticker/:symbol')
-  @ApiOperation({ summary: 'Get ticker information for a symbol' })
-  @ApiParam({ name: 'symbol', description: 'Trading pair symbol', example: 'BTC-USDT' })
-  async getTicker(@Param('symbol') symbol: string): Promise<TickerDto> {
-    return this.marketService.getTicker(symbol);
-  }
-
-  @Public()
-  @Get('tickers')
-  @ApiOperation({ summary: 'Get all tickers' })
-  async getTickers(): Promise<TickerDto[]> {
-    return this.marketService.getTickers();
-  }
-
-  @Public()
   @Get('kline/:symbol')
   @ApiOperation({ summary: 'Get kline data for a symbol' })
   @ApiParam({ name: 'symbol', description: 'Trading pair symbol', example: 'BTC-USDT' })
@@ -173,6 +157,22 @@ export class MarketController {
     @Query('limit') limit?: number,
   ) {
     return this.marketService.getDepth(symbol, limit);
+  }
+
+  @Public()
+  @Get('trades/:symbol')
+  @ApiOperation({ summary: '获取最近成交记录' })
+  @ApiParam({ name: 'symbol', description: '交易对', example: 'BTC-USDT' })
+  @ApiQuery({ name: 'limit', description: '获取数量', required: false, type: Number })
+  @ApiResponse({ status: 200, description: '获取成功', type: [RecentTradeDto] })
+  async getRecentTrades(
+    @Param('symbol') symbol: string,
+    @Query('limit', new DefaultValuePipe(100), ParseIntPipe) limit: number,
+  ): Promise<RecentTradeDto[]> {
+    if (limit > 1000) {
+      throw new BadRequestException('Limit cannot exceed 1000');
+    }
+    return this.marketService.getRecentTrades(symbol, limit);
   }
 
   @Public()

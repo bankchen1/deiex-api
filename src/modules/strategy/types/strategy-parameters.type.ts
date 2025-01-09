@@ -37,14 +37,28 @@ export interface BollingerBandsParameters extends BaseStrategyParameters {
 }
 
 export interface GridTradingParameters extends BaseStrategyParameters {
-  upperPrice: number;
-  lowerPrice: number;
   gridCount: number;
+  gridSpacing: number;
 }
 
-export type StrategyParameters = 
-  | MACrossoverParameters 
-  | MACDParameters 
-  | RSIParameters 
-  | BollingerBandsParameters 
-  | GridTradingParameters; 
+export interface IchimokuParameters extends BaseStrategyParameters {
+  conversionPeriod: number;
+  basePeriod: number;
+  spanPeriod: number;
+  displacement: number;
+}
+
+export interface DualThrustParameters extends BaseStrategyParameters {
+  lookbackPeriod: number;
+  upperMultiplier: number;
+  lowerMultiplier: number;
+}
+
+export type StrategyParameters =
+  | MACrossoverParameters
+  | MACDParameters
+  | RSIParameters
+  | BollingerBandsParameters
+  | GridTradingParameters
+  | IchimokuParameters
+  | DualThrustParameters;

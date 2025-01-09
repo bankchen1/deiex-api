@@ -1,17 +1,17 @@
 import { Module } from '@nestjs/common';
-import { MarketService } from './market.service';
+import { ConfigModule } from '@nestjs/config';
+import { EventEmitterModule } from '@nestjs/event-emitter';
+import { RedisModule } from '../redis/redis.module';
 import { MarketController } from './market.controller';
+import { MarketService } from './market.service';
 import { MarketGateway } from './gateways/market.gateway';
 import { DepthService } from './services/depth.service';
-import { MarketDataService } from './services/market-data.service';
-import { AppRedisModule } from '../../shared/redis/redis.module';
-import { RateLimiterService } from '../../shared/services/rate-limiter.service';
 import { PrometheusService } from '../../shared/services/prometheus.service';
-import { EventEmitterModule } from '@nestjs/event-emitter';
 
 @Module({
   imports: [
-    AppRedisModule,
+    RedisModule,
+    ConfigModule,
     EventEmitterModule.forRoot(),
   ],
   controllers: [MarketController],
@@ -19,10 +19,8 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
     MarketService,
     MarketGateway,
     DepthService,
-    MarketDataService,
-    RateLimiterService,
     PrometheusService,
   ],
-  exports: [MarketService, DepthService, MarketDataService],
+  exports: [MarketService],
 })
 export class MarketModule {}
