@@ -1,99 +1,57 @@
-import { Injectable, Inject } from '@nestjs/common';
-import { REDIS_CLIENT, RedisClient } from './redis.types';
+import { Injectable } from '@nestjs/common';
+import { InjectRedis } from '@liaoliaots/nestjs-redis';
+import Redis from 'ioredis';
 
 @Injectable()
 export class RedisService {
-  constructor(
-    @Inject(REDIS_CLIENT) private readonly redis: RedisClient,
-  ) {}
+  constructor(@InjectRedis() private readonly redis: Redis) {}
 
   async get(key: string): Promise<string | null> {
-    return this.redis.get(key);
+    return await this.redis.get(key);
   }
 
-  async set(key: string, value: string, ttl?: number): Promise<'OK'> {
+  async set(key: string, value: string, ttl?: number): Promise<void> {
     if (ttl) {
-      return this.redis.set(key, value, 'EX', ttl);
+      await this.redis.set(key, value, 'EX', ttl);
+    } else {
+      await this.redis.set(key, value);
     }
-    return this.redis.set(key, value);
   }
 
-  async del(key: string): Promise<number> {
-    return this.redis.del(key);
+  async del(key: string): Promise<void> {
+    await this.redis.del(key);
   }
 
-  async hget(key: string, field: string): Promise<string | null> {
-    return this.redis.hget(key, field);
-  }
-
-  async hset(key: string, field: string, value: string): Promise<number> {
-    return this.redis.hset(key, field, value);
-  }
-
-  async hdel(key: string, field: string): Promise<number> {
-    return this.redis.hdel(key, field);
-  }
-
-  async hgetall(key: string): Promise<Record<string, string>> {
-    return this.redis.hgetall(key);
-  }
-
-  async zadd(key: string, score: number, member: string): Promise<number> {
-    return this.redis.zadd(key, score, member);
-  }
-
-  async zrange(key: string, start: number, stop: number, withScores = false): Promise<string[]> {
-    if (withScores) {
-      return this.redis.zrange(key, start, stop, 'WITHSCORES');
-    }
-    return this.redis.zrange(key, start, stop);
-  }
-
-  async zrevrange(key: string, start: number, stop: number, withScores = false): Promise<string[]> {
-    if (withScores) {
-      return this.redis.zrevrange(key, start, stop, 'WITHSCORES');
-    }
-    return this.redis.zrevrange(key, start, stop);
-  }
-
-  async publish(channel: string, message: string): Promise<number> {
-    return this.redis.publish(channel, message);
-  }
-
-  async subscribe(channel: string, callback: (channel: string, message: string) => void): Promise<void> {
-    await this.redis.subscribe(channel);
-    this.redis.on('message', callback);
-  }
-
-  async unsubscribe(channel: string): Promise<void> {
-    await this.redis.unsubscribe(channel);
-  }
-
-  async incr(key: string): Promise<number> {
-    return this.redis.incr(key);
-  }
-
-  async decr(key: string): Promise<number> {
-    return this.redis.decr(key);
-  }
-
-  async expire(key: string, seconds: number): Promise<number> {
-    return this.redis.expire(key, seconds);
+  async exists(key: string): Promise<boolean> {
+    const result = await this.redis.exists(key);
+    return result === 1;
   }
 
   async ttl(key: string): Promise<number> {
-    return this.redis.ttl(key);
+    return await this.redis.ttl(key);
+  }
+
+  async expire(key: string, seconds: number): Promise<void> {
+    await this.redis.expire(key, seconds);
   }
 
   async keys(pattern: string): Promise<string[]> {
-    return this.redis.keys(pattern);
+    return await this.redis.keys(pattern);
   }
 
-  async multi(): Promise<RedisClient> {
-    return this.redis.multi();
+  async hget(key: string, field: string): Promise<string | null> {
+    return await this.redis.hget(key, field);
   }
 
-  async exec(): Promise<any[]> {
-    return this.redis.exec();
+  async hset(key: string, field: string, value: string): Promise<void> {
+    await this.redis.hset(key, field, value);
+  }
+
+  async hdel(key: string, field: string): Promise<void> {
+    await this.redis.hdel(key, field);
+  }
+
+  async hgetall(key: string): Promise<Record<string, string>> {
+    return await this.redis.hgetall(key);
   }
 }

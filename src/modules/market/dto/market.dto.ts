@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNumber, IsEnum, IsOptional, Min, Max, IsArray } from 'class-validator';
+import { IsString, IsNumber, IsEnum, IsOptional, Min, Max, IsArray, IsBoolean } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export enum KlineInterval {
@@ -15,23 +15,31 @@ export enum KlineInterval {
 }
 
 export class MarketOverviewDto {
-  @ApiProperty({ description: 'Bitcoin market data' })
+  @ApiProperty({
+    description: 'Bitcoin market data',
+    type: () => ({
+      price: Number,
+      volume24h: Number,
+      priceChange24h: Number,
+    }),
+  })
   btc: {
-    @ApiProperty({ description: 'Price' })
     price: number;
-    @ApiProperty({ description: '24h volume' })
     volume24h: number;
-    @ApiProperty({ description: '24h price change' })
     priceChange24h: number;
   };
 
-  @ApiProperty({ description: 'Ethereum market data' })
+  @ApiProperty({
+    description: 'Ethereum market data',
+    type: () => ({
+      price: Number,
+      volume24h: Number,
+      priceChange24h: Number,
+    }),
+  })
   eth: {
-    @ApiProperty({ description: 'Price' })
     price: number;
-    @ApiProperty({ description: '24h volume' })
     volume24h: number;
-    @ApiProperty({ description: '24h price change' })
     priceChange24h: number;
   };
 
@@ -83,29 +91,17 @@ export class OrderBookDto {
   @IsString()
   symbol: string;
 
-  @ApiProperty({ description: 'Bid orders', type: [Object] })
+  @ApiProperty({ description: 'Bid orders', type: [Array] })
   @IsArray()
-  @Type(() => Object)
-  bids: Array<{ 
-    @ApiProperty({ description: 'Price level' })
-    price: string;
-    @ApiProperty({ description: 'Quantity at price level' })
-    quantity: string; 
-  }>;
+  bids: [string, string][];
 
-  @ApiProperty({ description: 'Ask orders', type: [Object] })
+  @ApiProperty({ description: 'Ask orders', type: [Array] })
   @IsArray()
-  @Type(() => Object)
-  asks: Array<{ 
-    @ApiProperty({ description: 'Price level' })
-    price: string;
-    @ApiProperty({ description: 'Quantity at price level' })
-    quantity: string; 
-  }>;
+  asks: [string, string][];
 
-  @ApiProperty({ description: 'Data timestamp' })
+  @ApiProperty({ description: 'Last update ID' })
   @IsNumber()
-  timestamp: number;
+  lastUpdateId: number;
 }
 
 export class KlineDto {
@@ -235,15 +231,19 @@ export class RecentTradeDto {
 }
 
 export class MarketStatusDto {
-  @ApiProperty({ description: 'Market status information', type: [Object] })
+  @ApiProperty({
+    description: 'Market status information',
+    type: () => ({
+      symbol: String,
+      status: String,
+      lastUpdate: Number,
+    }),
+    isArray: true,
+  })
   @IsArray()
-  @Type(() => Object)
   markets: Array<{
-    @ApiProperty({ description: 'Market symbol' })
     symbol: string;
-    @ApiProperty({ description: 'Market status' })
     status: string;
-    @ApiProperty({ description: 'Last update time' })
     lastUpdate: number;
   }>;
 

@@ -17,8 +17,11 @@ model User {
   username         String    @unique
   role             String    @default("user")
   isActive         Boolean   @default(true)
+  status           String    @default("ACTIVE") // ACTIVE, DISABLED, SUSPENDED
+  emailVerified    Boolean   @default(false)
   twoFactorEnabled Boolean   @default(false)
   twoFactorSecret  String?
+  lastLoginAt      DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
