@@ -18,32 +18,36 @@ export enum OrderStatus {
   REJECTED = 'REJECTED',
 }
 
-export type Trade = {
+export interface UserInfo {
+  id: string;
+  email: string;
+  username: string;
+  password: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface Trade {
   id: string;
   userId: string;
   symbol: string;
   side: string;
   amount: string;
   price: string;
-  profitPercent?: number;
-  pnl?: string;
-  fee?: string;
-  makerOrderId: string;
-  takerOrderId: string;
-  makerUserId: string;
-  takerUserId: string;
+  profitPercent?: number | null;
+  pnl?: string | null;
+  fee?: string | null;
+  makerOrderId?: string | null;
+  takerOrderId?: string | null;
+  makerUserId?: string | null;
+  takerUserId?: string | null;
+  orderId?: string | null;
   createdAt: Date;
   updatedAt: Date;
-  user?: {
-    id: string;
-    email: string;
-    username: string;
-    createdAt: Date;
-    updatedAt: Date;
-  };
-};
+  user?: UserInfo;
+}
 
-export type Order = {
+export interface Order {
   id: string;
   userId: string;
   symbol: string;
@@ -60,17 +64,11 @@ export type Order = {
   createdAt: Date;
   updatedAt: Date;
   positionId?: string | null;
-  user?: {
-    id: string;
-    email: string;
-    username: string;
-    createdAt: Date;
-    updatedAt: Date;
-  };
+  user?: UserInfo;
   position?: Position;
-};
+}
 
-export type Position = {
+export interface Position {
   id: string;
   userId: string;
   symbol: string;
@@ -84,15 +82,9 @@ export type Position = {
   realizedPnl: string;
   createdAt: Date;
   updatedAt: Date;
-  user?: {
-    id: string;
-    email: string;
-    username: string;
-    createdAt: Date;
-    updatedAt: Date;
-  };
+  user?: UserInfo;
   orders?: Order[];
-};
+}
 
 export interface MatchResult {
   trades: Trade[];
@@ -119,11 +111,3 @@ export interface TradingPair {
   createdAt?: Date;
   updatedAt?: Date;
 }
-
-export type TradeCreateData = Prisma.TradeCreateInput;
-export type OrderCreateData = Prisma.OrderCreateInput;
-export type PositionCreateData = Prisma.PositionCreateInput;
-
-export type TradeUpdateData = Prisma.TradeUpdateInput;
-export type OrderUpdateData = Prisma.OrderUpdateInput;
-export type PositionUpdateData = Prisma.PositionUpdateInput;
