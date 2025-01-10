@@ -52,97 +52,6 @@ export class CopyTradingStatsDto {
 }
 
 export class CopyTradingHistoryDto {
-  @ApiProperty({ description: '交易者ID' })
-  traderId: string;
-
-  @ApiProperty({ description: '交易对' })
-  symbol: string;
-
-  @ApiProperty({ description: '交易数量' })
-  amount: number;
-
-  @ApiProperty({ description: '收益' })
-  profit: number;
-
-  @ApiProperty({ description: '复制时间' })
-  copyTime: Date;
-
-  @ApiProperty({ description: '状态' })
-  status: string;
-}
-
-export class TraderRankingDto {
-  @ApiProperty({ description: '交易者ID' })
-  traderId: string;
-
-  @ApiProperty({ description: '用户名' })
-  username: string;
-
-  @ApiProperty({ description: '总收益' })
-  totalProfit: number;
-
-  @ApiProperty({ description: '胜率' })
-  winRate: number;
-
-  @ApiProperty({ description: '跟随者数量' })
-  followersCount: number;
-
-  @ApiProperty({ description: '排名' })
-  ranking: number;
-}
-
-export class CopyTradingDto {
-  @ApiProperty({ description: '跟随者ID' })
-  followerId: string;
-
-  @ApiProperty({ description: '交易者ID' })
-  traderId: string;
-
-  @ApiProperty({ description: '跟单比例' })
-  copyRatio: number;
-
-  @ApiProperty({ description: '最大跟单金额' })
-  maxCopyAmount: number;
-
-  @ApiProperty({ description: '最小跟单金额' })
-  minCopyAmount: number;
-
-  @ApiProperty({ description: '是否启用' })
-  isActive: boolean;
-
-  @ApiProperty({ description: '创建时间' })
-  createdAt: Date;
-
-  @ApiProperty({ description: '更新时间' })
-  updatedAt: Date;
-}
-
-export class CreateCopyTradingDto {
-  @ApiProperty({ description: '交易者ID' })
-  traderId: string;
-
-  @ApiProperty({ description: '跟单比例', minimum: 0.01, maximum: 1 })
-  copyRatio: number;
-
-  @ApiProperty({ description: '最大跟单金额', minimum: 0 })
-  maxCopyAmount: number;
-
-  @ApiProperty({ description: '最小跟单金额', minimum: 0 })
-  minCopyAmount: number;
-}
-
-export class UpdateCopyTradingDto {
-  @ApiProperty({ description: '跟单比例', minimum: 0.01, maximum: 1, required: false })
-  copyRatio?: number;
-
-  @ApiProperty({ description: '最大跟单金额', minimum: 0, required: false })
-  maxCopyAmount?: number;
-
-  @ApiProperty({ description: '最小跟单金额', minimum: 0, required: false })
-  minCopyAmount?: number;
-}
-
-export class CopyTradingHistoryDto {
   @ApiProperty({ description: '跟单记录ID' })
   id: string;
 
@@ -192,4 +101,67 @@ export class TraderRankingDto {
 
   @ApiProperty({ description: '更新时间' })
   updatedAt: Date;
+}
+
+export class CopyTradingDto {
+  @ApiProperty({ description: '跟随者ID' })
+  followerId: string;
+
+  @ApiProperty({ description: '交易者ID' })
+  traderId: string;
+
+  @ApiProperty({ description: '跟单比例' })
+  copyRatio: number;
+
+  @ApiProperty({ description: '最大跟单金额' })
+  maxCopyAmount: number;
+
+  @ApiProperty({ description: '最小跟单金额' })
+  minCopyAmount: number;
+
+  @ApiProperty({ description: '是否启用' })
+  isActive: boolean;
+
+  @ApiProperty({ description: '创建时间' })
+  createdAt: Date;
+
+  @ApiProperty({ description: '更新时间' })
+  updatedAt: Date;
+}
+
+export class CreateCopyTradingDto {
+  @ApiProperty({ description: '交易者ID' })
+  traderId: string;
+
+  @ApiProperty({ description: '跟单比例', minimum: 0.01, maximum: 1 })
+  copyRatio: number;
+
+  @ApiProperty({ description: '最大跟单金额', minimum: 0 })
+  maxCopyAmount: number;
+
+  @ApiProperty({ description: '最小跟单金额', minimum: 0 })
+  minCopyAmount: number;
+
+  @ApiProperty({ description: '名称' })
+  name: string;
+
+  @ApiProperty({ description: '描述' })
+  description: string;
+
+  @ApiProperty({ description: '最大跟随者数量' })
+  maxFollowers: number;
+
+  @ApiProperty({ description: '佣金比例' })
+  commission: number;
+}
+
+export class UpdateCopyTradingDto {
+  @ApiProperty({ description: '跟单比例', minimum: 0.01, maximum: 1, required: false })
+  copyRatio?: number;
+
+  @ApiProperty({ description: '最大跟单金额', minimum: 0, required: false })
+  maxCopyAmount?: number;
+
+  @ApiProperty({ description: '最小跟单金额', minimum: 0, required: false })
+  minCopyAmount?: number;
 }

@@ -1,367 +1,174 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { InjectRedis } from '@liaoliaots/nestjs-redis';
+import { Injectable } from '@nestjs/common';
+import { InjectRedis } from '@nestjs-modules/ioredis';
 import Redis from 'ioredis';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { PrometheusService } from '../../shared/prometheus/prometheus.service';
+import { RiskManagementService } from './risk-management.service';
+import { ADLService } from './adl.service';
 import { PrismaService } from '../../prisma/prisma.service';
-import { ConfigService } from '@nestjs/config';
-import { PrometheusService } from '../../monitoring/services/prometheus.service';
-import {
-  PerpetualOrder,
-  Position,
-  PositionSide,
-  MarginType,
-  PerpetualOrderType,
-  OrderStatus,
-  PerpetualConfig,
-  MarginLevel,
-} from '../types/perpetual.types';
-import { LiquidationService } from './liquidation.service';
-import { FundingService } from './funding.service';
-import { MarketDataService } from '../../market/services/market-data.service';
 
 @Injectable()
 export class PerpetualService {
-  private readonly logger = new Logger(PerpetualService.name);
-  private readonly configs: Map<string, PerpetualConfig> = new Map();
-  private readonly marginLevels: Map<string, MarginLevel[]> = new Map();
-
   constructor(
-    private readonly prisma: PrismaService,
     @InjectRedis() private readonly redis: Redis,
-    private readonly eventEmitter: EventEmitter2,
-    private readonly configService: ConfigService,
     private readonly prometheusService: PrometheusService,
-    private readonly liquidationService: LiquidationService,
-    private readonly fundingService: FundingService,
-    private readonly marketDataService: MarketDataService,
-  ) {
-    this.initializeConfigs();
-  }
+    private readonly riskManagementService: RiskManagementService,
+    private readonly adlService: ADLService,
+    private readonly prisma: PrismaService,
+  ) {}
 
-  private async initializeConfigs() {
-    const perpetualPairs = await this.prisma.perpetualPair.findMany({
-      where: { isActive: true },
-    });
+  async createOrder(userId: string, orderData: any) {
+    // Validate order parameters
+    this.validateOrderParameters(orderData);
 
-    for (const pair of perpetualPairs) {
-      this.configs.set(pair.symbol, {
-        symbol: pair.symbol,
-        baseAsset: pair.baseAsset,
-        quoteAsset: pair.quoteAsset,
-        tickSize: pair.tickSize,
-        lotSize: pair.lotSize,
-        maxLeverage: pair.maxLeverage,
-        maintMarginRatio: pair.maintMarginRatio,
-        initialMarginRatio: pair.initialMarginRatio,
-        maxPrice: pair.maxPrice,
-        minPrice: pair.minPrice,
-        maxQuantity: pair.maxQuantity,
-        minQuantity: pair.minQuantity,
-        fundingInterval: pair.fundingInterval,
-        insuranceFundFactor: pair.insuranceFundFactor,
-      });
+    // Check margin requirements
+    await this.checkMarginRequirements(userId, orderData);
 
-      this.marginLevels.set(pair.symbol, pair.marginLevels);
-    }
-  }
+    // Lock margin
+    await this.lockMargin(userId, orderData);
 
-  async createOrder(userId: string, orderData: Partial<PerpetualOrder>): Promise<PerpetualOrder> {
-    const startTime = Date.now();
     try {
-      // 验证订单参数
-      this.validateOrderParams(orderData);
-
-      // 检查用户余额和保证金
-      await this.checkMarginRequirement(userId, orderData);
-
-      // 创建订单
-      const order = await this.prisma.$transaction(async (prisma) => {
-        // 锁定保证金
-        await this.lockMargin(prisma, userId, orderData);
-
-        // 创建订单记录
-        const newOrder = await prisma.perpetualOrder.create({
-          data: {
-            ...orderData,
-            userId,
-            status: OrderStatus.NEW,
-            filled: 0,
-            avgPrice: 0,
-            fee: 0,
-          },
-        });
-
-        // 如果是市价单，直接执行
-        if (orderData.type === PerpetualOrderType.MARKET) {
-          await this.executeOrder(prisma, newOrder);
-        }
-
-        return newOrder;
+      // Create order in database
+      const order = await this.prisma.order.create({
+        data: {
+          userId,
+          symbol: orderData.symbol,
+          side: orderData.side,
+          type: orderData.type,
+          price: orderData.price,
+          quantity: orderData.quantity,
+          leverage: orderData.leverage,
+          margin: orderData.margin,
+          timeInForce: orderData.timeInForce,
+          status: 'NEW',
+        },
       });
 
-      // 发送订单创建事件
-      this.eventEmitter.emit('perpetual.order.created', order);
-
-      // 记录性能指标
-      this.prometheusService.recordLatency('perpetual_order_create', Date.now() - startTime);
+      // Track metrics
+      this.prometheusService.incrementOrderCount(
+        order.symbol,
+        order.side,
+        order.type,
+      );
 
       return order;
     } catch (error) {
-      this.logger.error(`Failed to create perpetual order: ${error.message}`);
-      this.prometheusService.incrementErrors('perpetual_order_create_error');
+      // Unlock margin if order creation fails
+      await this.unlockMargin(userId, orderData);
       throw error;
     }
   }
 
-  async executeOrder(prisma: any, order: PerpetualOrder): Promise<void> {
-    const position = await this.getOrCreatePosition(prisma, order.userId, order.symbol, order.side);
-    const markPrice = await this.getMarkPrice(order.symbol);
-
-    // 计算执行价格和数量
-    const executionPrice = order.type === PerpetualOrderType.MARKET ? markPrice : order.price;
-    const executionAmount = order.amount - order.filled;
-
-    // 更新持仓
-    await this.updatePosition(prisma, position, {
-      price: executionPrice,
-      amount: executionAmount,
-      side: order.side,
-    });
-
-    // 更新订单状态
-    await prisma.perpetualOrder.update({
-      where: { id: order.id },
-      data: {
-        status: OrderStatus.FILLED,
-        filled: order.amount,
-        avgPrice: executionPrice,
-        updatedAt: new Date(),
-      },
-    });
-
-    // 计算并收取手续费
-    const fee = this.calculateFee(executionPrice, executionAmount);
-    await this.chargeFee(prisma, order.userId, fee);
-
-    // 检查是否需要清算
-    await this.liquidationService.checkLiquidation(position.id);
+  private validateOrderParameters(orderData: any) {
+    // Implement order parameter validation
+    // Check symbol, side, type, price, quantity, leverage, etc.
   }
 
-  private async getOrCreatePosition(
-    prisma: any,
-    userId: string,
-    symbol: string,
-    side: PositionSide,
-  ): Promise<Position> {
-    let position = await prisma.position.findFirst({
+  private async checkMarginRequirements(userId: string, orderData: any) {
+    // Check if user has sufficient margin
+    const balance = await this.prisma.balance.findUnique({
       where: {
-        userId,
-        symbol,
-        side,
+        userId_currency: {
+          userId,
+          currency: 'USDT',
+        },
       },
     });
 
-    if (!position) {
-      position = await prisma.position.create({
-        data: {
+    if (!balance || parseFloat(balance.available) < parseFloat(orderData.margin)) {
+      throw new Error('Insufficient margin');
+    }
+  }
+
+  private async lockMargin(userId: string, orderData: any) {
+    // Lock margin for the order
+    await this.prisma.balance.update({
+      where: {
+        userId_currency: {
+          userId,
+          currency: 'USDT',
+        },
+      },
+      data: {
+        available: {
+          decrement: orderData.margin,
+        },
+        locked: {
+          increment: orderData.margin,
+        },
+      },
+    });
+  }
+
+  private async unlockMargin(userId: string, orderData: any) {
+    // Unlock margin if order fails
+    await this.prisma.balance.update({
+      where: {
+        userId_currency: {
+          userId,
+          currency: 'USDT',
+        },
+      },
+      data: {
+        available: {
+          increment: orderData.margin,
+        },
+        locked: {
+          decrement: orderData.margin,
+        },
+      },
+    });
+  }
+
+  async getPosition(userId: string, symbol: string, side: string) {
+    return this.prisma.position.findUnique({
+      where: {
+        userId_symbol_side: {
           userId,
           symbol,
           side,
-          amount: 0,
-          leverage: 1,
-          marginType: MarginType.ISOLATED,
-          entryPrice: 0,
-          liquidationPrice: 0,
-          bankruptcy: 0,
-          margin: 0,
-          unrealizedPnl: 0,
-          realizedPnl: 0,
-          maintMargin: 0,
-          marginRatio: 0,
-        },
-      });
-    }
-
-    return position;
-  }
-
-  private async updatePosition(
-    prisma: any,
-    position: Position,
-    update: { price: number; amount: number; side: PositionSide },
-  ): Promise<void> {
-    const { price, amount, side } = update;
-    const config = this.configs.get(position.symbol);
-
-    // 计算新的持仓数据
-    const newAmount = position.amount + (side === position.side ? amount : -amount);
-    const newEntryPrice = this.calculateNewEntryPrice(position, price, amount);
-    const newLiquidationPrice = this.calculateLiquidationPrice(
-      newEntryPrice,
-      newAmount,
-      position.leverage,
-      side,
-      config,
-    );
-
-    // 更新持仓
-    await prisma.position.update({
-      where: { id: position.id },
-      data: {
-        amount: newAmount,
-        entryPrice: newEntryPrice,
-        liquidationPrice: newLiquidationPrice,
-        lastUpdateTime: new Date(),
-      },
-    });
-  }
-
-  private calculateNewEntryPrice(
-    position: Position,
-    price: number,
-    amount: number,
-  ): number {
-    if (position.amount === 0) return price;
-    return (position.entryPrice * position.amount + price * amount) / (position.amount + amount);
-  }
-
-  private calculateLiquidationPrice(
-    entryPrice: number,
-    amount: number,
-    leverage: number,
-    side: PositionSide,
-    config: PerpetualConfig,
-  ): number {
-    const maintMargin = amount * entryPrice * config.maintMarginRatio;
-    const direction = side === PositionSide.LONG ? 1 : -1;
-    return entryPrice * (1 - direction * (1 / leverage - config.maintMarginRatio));
-  }
-
-  private async getMarkPrice(symbol: string): Promise<number> {
-    const ticker = await this.marketDataService.getTickerData(symbol);
-    return ticker.price;
-  }
-
-  private calculateFee(price: number, amount: number): number {
-    const feeRate = this.configService.get('PERPETUAL_FEE_RATE', 0.0004);
-    return price * amount * feeRate;
-  }
-
-  private async chargeFee(prisma: any, userId: string, fee: number): Promise<void> {
-    await prisma.userBalance.update({
-      where: { userId },
-      data: {
-        balance: {
-          decrement: fee,
         },
       },
     });
   }
 
-  // 公共API方法
-  async getPosition(userId: string, symbol: string): Promise<Position> {
-    return await this.prisma.position.findFirst({
+  async updatePosition(positionId: string, data: any) {
+    return this.prisma.position.update({
+      where: { id: positionId },
+      data,
+    });
+  }
+
+  async getOpenOrders(userId: string) {
+    return this.prisma.order.findMany({
       where: {
         userId,
-        symbol,
+        status: 'NEW',
       },
     });
   }
 
-  async getOpenOrders(userId: string, symbol?: string): Promise<PerpetualOrder[]> {
-    return await this.prisma.perpetualOrder.findMany({
-      where: {
-        userId,
-        symbol,
-        status: {
-          in: [OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED],
-        },
-      },
+  async cancelOrder(userId: string, orderId: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
     });
-  }
 
-  async cancelOrder(userId: string, orderId: string): Promise<PerpetualOrder> {
-    return await this.prisma.$transaction(async (prisma) => {
-      const order = await prisma.perpetualOrder.findFirst({
-        where: {
-          id: orderId,
-          userId,
-        },
-      });
-
-      if (!order) {
-        throw new Error('Order not found');
-      }
-
-      if (order.status !== OrderStatus.NEW && order.status !== OrderStatus.PARTIALLY_FILLED) {
-        throw new Error('Order cannot be canceled');
-      }
-
-      // 解锁保证金
-      await this.unlockMargin(prisma, userId, order);
-
-      // 更新订单状态
-      return await prisma.perpetualOrder.update({
-        where: { id: orderId },
-        data: {
-          status: OrderStatus.CANCELED,
-          updatedAt: new Date(),
-        },
-      });
-    });
-  }
-
-  async adjustLeverage(
-    userId: string,
-    symbol: string,
-    leverage: number,
-  ): Promise<Position> {
-    const config = this.configs.get(symbol);
-    if (!config) {
-      throw new Error('Invalid symbol');
+    if (!order || order.userId !== userId) {
+      throw new Error('Order not found');
     }
 
-    if (leverage > config.maxLeverage) {
-      throw new Error(`Maximum leverage is ${config.maxLeverage}`);
+    if (order.status !== 'NEW') {
+      throw new Error('Order cannot be cancelled');
     }
 
-    return await this.prisma.$transaction(async (prisma) => {
-      const position = await prisma.position.findFirst({
-        where: {
-          userId,
-          symbol,
-        },
-      });
-
-      if (!position) {
-        throw new Error('Position not found');
-      }
-
-      // 检查新的杠杆率是否会导致立即清算
-      const newLiquidationPrice = this.calculateLiquidationPrice(
-        position.entryPrice,
-        position.amount,
-        leverage,
-        position.side,
-        config,
-      );
-
-      const markPrice = await this.getMarkPrice(symbol);
-      if (
-        (position.side === PositionSide.LONG && markPrice <= newLiquidationPrice) ||
-        (position.side === PositionSide.SHORT && markPrice >= newLiquidationPrice)
-      ) {
-        throw new Error('New leverage would cause immediate liquidation');
-      }
-
-      return await prisma.position.update({
-        where: { id: position.id },
-        data: {
-          leverage,
-          liquidationPrice: newLiquidationPrice,
-          lastUpdateTime: new Date(),
-        },
-      });
+    // Update order status
+    await this.prisma.order.update({
+      where: { id: orderId },
+      data: { status: 'CANCELED' },
     });
+
+    // Unlock margin
+    await this.unlockMargin(userId, order);
+
+    return { success: true };
   }
 }

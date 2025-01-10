@@ -1,9 +1,30 @@
-import { Injectable, BadRequestException, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger, NotFoundException, Inject } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { InjectRedis } from '@liaoliaots/nestjs-redis';
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { AssetService } from '../asset/asset.service';
+import { RiskService } from '../risk/risk.service';
+import { PrometheusService } from '../prometheus/prometheus.service';
+import { OrderMatchingEngine } from './engines/order-matching.engine';
+import { 
+  OrderSide, 
+  OrderType, 
+  OrderStatus, 
+  Order, 
+  Trade, 
+  Position, 
+  TradingPair,
+  TradeCreateData,
+  OrderCreateData,
+  PositionCreateData,
+  OrderUpdateData,
+  PositionUpdateData,
+  TradeUpdateData,
+} from './types/trade.types';
+import { REDIS_CLIENT } from '../redis/redis.provider';
+import { v4 as uuidv4 } from 'uuid';
+import { Prisma } from '@prisma/client';
 import {
   CreateOrderDto,
   OrderResponseDto,
@@ -14,17 +35,32 @@ import {
   UpdatePositionDto,
   PositionResponseDto,
 } from './dto/trade.dto';
-import {
-  Order,
-  OrderStatus,
-  OrderSide,
-  Trade,
-  Position,
-} from './types/trade.types';
-import { AssetService } from '../asset/asset.service';
-import { OrderMatchingEngine } from './engines/order-matching.engine';
-import { v4 as uuidv4 } from 'uuid';
-import { RiskService } from '../risk/risk.service';
+
+type PrismaTradeInclude = {
+  user: true;
+};
+
+type PrismaOrderInclude = {
+  user: true;
+  position: true;
+};
+
+type PrismaPositionInclude = {
+  user: true;
+  orders: true;
+};
+
+type PrismaTrade = Prisma.TradeGetPayload<{
+  include: PrismaTradeInclude;
+}>;
+
+type PrismaOrder = Prisma.OrderGetPayload<{
+  include: PrismaOrderInclude;
+}>;
+
+type PrismaPosition = Prisma.PositionGetPayload<{
+  include: PrismaPositionInclude;
+}>;
 
 @Injectable()
 export class TradeService {
@@ -33,11 +69,12 @@ export class TradeService {
 
   constructor(
     private readonly prisma: PrismaService,
-    @InjectRedis() private readonly redis: Redis,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly configService: ConfigService,
     private readonly eventEmitter: EventEmitter2,
     private readonly assetService: AssetService,
     private readonly riskService: RiskService,
+    private readonly prometheusService: PrometheusService,
   ) {}
 
   async onModuleInit() {
@@ -46,17 +83,21 @@ export class TradeService {
 
   private async initializeMatchingEngines() {
     try {
-      const tradingPairs = await this.prisma.tradingPair.findMany({
-        where: { isActive: true },
-      });
+      // 从配置或数据库获取交易对列表
+      const tradingPairs: TradingPair[] = [
+        { symbol: 'BTC-USDT', baseAsset: 'BTC', quoteAsset: 'USDT', isActive: true },
+        { symbol: 'ETH-USDT', baseAsset: 'ETH', quoteAsset: 'USDT', isActive: true },
+      ];
 
       for (const pair of tradingPairs) {
-        const engine = new OrderMatchingEngine(pair.symbol);
-        await this.loadExistingOrders(engine, pair.symbol);
-        this.matchingEngines.set(pair.symbol, engine);
+        if (pair.isActive) {
+          const engine = new OrderMatchingEngine(pair.symbol);
+          await this.loadExistingOrders(engine, pair.symbol);
+          this.matchingEngines.set(pair.symbol, engine);
+        }
       }
 
-      this.logger.log(`Initialized matching engines for ${tradingPairs.length} trading pairs`);
+      this.logger.log(`Initialized matching engines for ${tradingPairs.filter(p => p.isActive).length} trading pairs`);
     } catch (error) {
       this.logger.error('Failed to initialize matching engines:', error);
       throw error;
@@ -81,11 +122,19 @@ export class TradeService {
         id: order.id,
         userId: order.userId,
         symbol: order.symbol,
-        side: order.side,
-        type: order.type,
+        side: order.side as OrderSide,
+        type: order.type as OrderType,
         price: order.price,
-        amount: order.amount - order.filled,
-        timestamp: order.createdAt.getTime(),
+        quantity: order.quantity,
+        leverage: order.leverage,
+        margin: order.margin,
+        timeInForce: order.timeInForce,
+        status: order.status as OrderStatus,
+        filledQty: order.filledQty,
+        remainingQty: order.remainingQty,
+        createdAt: order.createdAt,
+        updatedAt: order.updatedAt,
+        positionId: order.positionId,
       });
     }
   }
@@ -101,7 +150,7 @@ export class TradeService {
       userId,
       createOrderDto.symbol,
       createOrderDto.side,
-      createOrderDto.amount,
+      createOrderDto.quantity,
       createOrderDto.leverage || 1,
       createOrderDto.price,
     );
@@ -113,7 +162,7 @@ export class TradeService {
     // 计算所需保证金
     const margin = this.calculateRequiredMargin(
       createOrderDto.price,
-      createOrderDto.amount,
+      createOrderDto.quantity,
       createOrderDto.leverage || 1,
     );
 
@@ -122,12 +171,12 @@ export class TradeService {
     
     if (createOrderDto.side === OrderSide.BUY) {
       const balance = await this.assetService.getUserBalance(userId, quoteAsset);
-      if (balance.balance < margin) {
+      if (parseFloat(balance.available) < parseFloat(margin)) {
         throw new BadRequestException('Insufficient margin');
       }
     } else {
       const balance = await this.assetService.getUserBalance(userId, baseAsset);
-      if (balance.balance < createOrderDto.amount) {
+      if (parseFloat(balance.available) < parseFloat(createOrderDto.quantity)) {
         throw new BadRequestException('Insufficient balance');
       }
     }
@@ -143,14 +192,12 @@ export class TradeService {
           side: createOrderDto.side,
           type: createOrderDto.type,
           price: createOrderDto.price,
-          amount: createOrderDto.amount,
-          filled: 0,
+          quantity: createOrderDto.quantity,
+          filledQty: '0',
           status: OrderStatus.PENDING,
-          clientOrderId: createOrderDto.clientOrderId,
           leverage: createOrderDto.leverage,
           margin,
-          stopLoss: createOrderDto.stopLoss,
-          takeProfit: createOrderDto.takeProfit,
+          timeInForce: createOrderDto.timeInForce,
         },
       });
 
@@ -165,20 +212,28 @@ export class TradeService {
     });
 
     // 处理订单匹配
-    const trades = await engine.processOrder({
+    const matchResult = await engine.processOrder({
       id: order.id,
       userId: order.userId,
       symbol: order.symbol,
-      side: order.side,
-      type: order.type,
+      side: order.side as OrderSide,
+      type: order.type as OrderType,
       price: order.price,
-      amount: order.amount,
-      timestamp: order.createdAt.getTime(),
+      quantity: order.quantity,
+      leverage: order.leverage,
+      margin: order.margin,
+      timeInForce: order.timeInForce,
+      status: order.status as OrderStatus,
+      filledQty: order.filledQty,
+      remainingQty: order.remainingQty,
+      createdAt: order.createdAt,
+      updatedAt: order.updatedAt,
+      positionId: order.positionId,
     });
 
     // 处理交易
-    if (trades.length > 0) {
-      await this.processTrades(trades);
+    if (matchResult.trades.length > 0) {
+      await this.processTrades(matchResult.trades);
     }
 
     // 发送事件
@@ -224,11 +279,16 @@ export class TradeService {
 
       // 解冻未使用的保证金
       const [baseAsset, quoteAsset] = this.getAssetPair(order.symbol);
-      const remainingMargin = order.margin * ((order.amount - order.filled) / order.amount);
+      const remainingMargin = (
+        parseFloat(order.margin) * 
+        (parseFloat(order.quantity) - parseFloat(order.filledQty)) / 
+        parseFloat(order.quantity)
+      ).toString();
+      
       await this.assetService.unfreezeBalance(
         userId,
         order.side === OrderSide.BUY ? quoteAsset : baseAsset,
-        remainingMargin,
+        remainingMargin
       );
 
       return updatedOrder;
@@ -250,11 +310,7 @@ export class TradeService {
       throw new BadRequestException('Trading pair not found');
     }
 
-    const snapshot = engine.getOrderBookSnapshot(limit);
-    return {
-      bids: snapshot.bids,
-      asks: snapshot.asks,
-    };
+    return engine.getOrderBookSnapshot();
   }
 
   async getUserOrders(userId: string, symbol?: string): Promise<OrderResponseDto[]> {
@@ -274,6 +330,7 @@ export class TradeService {
   async getUserTrades(userId: string, query: TradeQueryDto): Promise<TradeHistoryDto> {
     const where: any = {
       OR: [
+        { userId },
         { makerUserId: userId },
         { takerUserId: userId },
       ],
@@ -292,11 +349,16 @@ export class TradeService {
       if (query.endTime) where.createdAt.lte = new Date(query.endTime);
     }
 
+    const page = query.page || 1;
+    const limit = query.limit || 10;
+    const skip = (page - 1) * limit;
+
     const [trades, total] = await Promise.all([
       this.prisma.trade.findMany({
         where,
         orderBy: { createdAt: 'desc' },
-        take: query.limit,
+        take: limit,
+        skip,
       }),
       this.prisma.trade.count({ where }),
     ]);
@@ -304,6 +366,8 @@ export class TradeService {
     return {
       trades: trades.map(trade => this.mapTradeToResponse(trade)),
       total,
+      page,
+      limit,
     };
   }
 
@@ -334,15 +398,15 @@ export class TradeService {
       throw new BadRequestException('No trades found');
     }
 
-    const firstPrice = trades[trades.length - 1].price;
-    const lastPrice = lastTrade.price;
-    const volume = trades.reduce((sum, trade) => sum + trade.amount, 0);
-    const high = Math.max(...trades.map(trade => trade.price));
-    const low = Math.min(...trades.map(trade => trade.price));
+    const firstPrice = parseFloat(trades[trades.length - 1].price);
+    const lastPrice = parseFloat(lastTrade.price);
+    const volume = trades.reduce((sum, trade) => sum + parseFloat(trade.amount), 0);
+    const high = Math.max(...trades.map(trade => parseFloat(trade.price)));
+    const low = Math.min(...trades.map(trade => parseFloat(trade.price)));
     const change = lastPrice - firstPrice;
     const changePercent = (change / firstPrice) * 100;
 
-    const statistics = {
+    const statistics: TradeStatisticsDto = {
       symbol,
       price: lastPrice,
       volume,
@@ -381,68 +445,36 @@ export class TradeService {
     });
 
     if (!position || position.userId !== userId) {
-      throw new BadRequestException('Position not found');
+      throw new NotFoundException('Position not found');
     }
 
-    // 更新止损止盈
-    if (updateDto.stopLoss || updateDto.takeProfit) {
-      const updatedPosition = await this.prisma.position.update({
-        where: { id: positionId },
-        data: {
-          stopLoss: updateDto.stopLoss,
-          takeProfit: updateDto.takeProfit,
-        },
-      });
-      return this.mapPositionToResponse(updatedPosition);
+    const minMargin = this.calculateMinMargin(position);
+    const maxRemovable = parseFloat(position.margin) - minMargin;
+
+    if (updateDto.removeMargin && updateDto.removeMargin > maxRemovable) {
+      throw new BadRequestException('Cannot remove more than available margin');
     }
 
-    // 增加或减少保证金
-    if (updateDto.addMargin || updateDto.removeMargin) {
-      return await this.prisma.$transaction(async (prisma) => {
-        const [baseAsset, quoteAsset] = this.getAssetPair(position.symbol);
-        const asset = position.side === OrderSide.BUY ? quoteAsset : baseAsset;
+    const [baseAsset] = this.getAssetPair(position.symbol);
 
-        if (updateDto.addMargin) {
-          await this.assetService.freezeBalance(userId, asset, updateDto.addMargin);
-          const updatedPosition = await prisma.position.update({
-            where: { id: positionId },
-            data: {
-              margin: { increment: updateDto.addMargin },
-              liquidationPrice: this.calculateLiquidationPrice({
-                ...position,
-                margin: position.margin + updateDto.addMargin,
-              }),
-            },
-          });
-          return this.mapPositionToResponse(updatedPosition);
-        }
-
-        if (updateDto.removeMargin) {
-          const minMargin = this.calculateMinMargin(position);
-          const maxRemovable = position.margin - minMargin;
-          if (updateDto.removeMargin > maxRemovable) {
-            throw new BadRequestException('Cannot remove this much margin');
-          }
-
-          await this.assetService.unfreezeBalance(userId, asset, updateDto.removeMargin);
-          const updatedPosition = await prisma.position.update({
-            where: { id: positionId },
-            data: {
-              margin: { decrement: updateDto.removeMargin },
-              liquidationPrice: this.calculateLiquidationPrice({
-                ...position,
-                margin: position.margin - updateDto.removeMargin,
-              }),
-            },
-          });
-          return this.mapPositionToResponse(updatedPosition);
-        }
-
-        return this.mapPositionToResponse(position);
-      });
+    if (updateDto.removeMargin) {
+      await this.assetService.unfreezeBalance(userId, baseAsset, updateDto.removeMargin.toString());
     }
 
-    return this.mapPositionToResponse(position);
+    const updatedPosition = await this.prisma.position.update({
+      where: { id: positionId },
+      data: {
+        margin: updateDto.removeMargin 
+          ? (parseFloat(position.margin) - updateDto.removeMargin).toString()
+          : position.margin,
+        liquidationPrice: this.calculateLiquidationPrice({
+          ...position,
+          margin: parseFloat(position.margin) - (updateDto.removeMargin || 0),
+        }).toString(),
+      },
+    });
+
+    return this.mapPositionToResponse(updatedPosition);
   }
 
   async getTradeDetail(userId: string, tradeId: string): Promise<TradeResponseDto> {
@@ -464,22 +496,53 @@ export class TradeService {
   }
 
   async closeTrade(userId: string, tradeId: string): Promise<TradeResponseDto> {
-    // 获取交易
-    const trade = await this.prisma.trade.findFirst({
+    const tradeResult = await this.prisma.trade.findFirst({
       where: {
         id: tradeId,
-        OR: [
-          { makerUserId: userId },
-          { takerUserId: userId },
-        ],
+        userId,
+      },
+      select: {
+        id: true,
+        userId: true,
+        symbol: true,
+        side: true,
+        amount: true,
+        price: true,
+        profitPercent: true,
+        pnl: true,
+        fee: true,
+        makerOrderId: true,
+        takerOrderId: true,
+        makerUserId: true,
+        takerUserId: true,
+        createdAt: true,
+        updatedAt: true,
+        user: true,
       },
     });
 
-    if (!trade) {
+    if (!tradeResult) {
       throw new NotFoundException('Trade not found');
     }
 
-    // 获取关联的订单
+    const trade: Trade = {
+      id: tradeResult.id,
+      userId: tradeResult.userId,
+      symbol: tradeResult.symbol,
+      side: tradeResult.side as OrderSide,
+      amount: tradeResult.amount,
+      price: tradeResult.price,
+      profitPercent: tradeResult.profitPercent || 0,
+      pnl: tradeResult.pnl || '0',
+      fee: tradeResult.fee || '0',
+      makerOrderId: tradeResult.makerOrderId,
+      takerOrderId: tradeResult.takerOrderId,
+      makerUserId: tradeResult.makerUserId,
+      takerUserId: tradeResult.takerUserId,
+      createdAt: tradeResult.createdAt,
+      updatedAt: tradeResult.updatedAt,
+    };
+
     const order = await this.prisma.order.findFirst({
       where: {
         OR: [
@@ -488,18 +551,50 @@ export class TradeService {
         ],
         userId,
       },
+      select: {
+        id: true,
+        userId: true,
+        symbol: true,
+        side: true,
+        type: true,
+        price: true,
+        quantity: true,
+        leverage: true,
+        margin: true,
+        timeInForce: true,
+        status: true,
+        filledQty: true,
+        remainingQty: true,
+        createdAt: true,
+        updatedAt: true,
+        positionId: true,
+      },
     });
 
     if (!order) {
       throw new NotFoundException('Order not found');
     }
 
-    // 获取关联的仓位
     const position = await this.prisma.position.findFirst({
       where: {
         userId,
         symbol: trade.symbol,
         side: order.side,
+      },
+      select: {
+        id: true,
+        userId: true,
+        symbol: true,
+        side: true,
+        quantity: true,
+        entryPrice: true,
+        leverage: true,
+        liquidationPrice: true,
+        margin: true,
+        unrealizedPnl: true,
+        realizedPnl: true,
+        createdAt: true,
+        updatedAt: true,
       },
     });
 
@@ -507,27 +602,30 @@ export class TradeService {
       throw new NotFoundException('Position not found');
     }
 
-    // 计算盈亏
+    const params = {
+      side: order.side as OrderSide,
+      entryPrice: position.entryPrice,
+      margin: Number(position.margin),
+      leverage: position.leverage,
+    };
+
     const pnl = this.calculateUnrealizedPnl(
-      position.side,
-      position.amount,
+      params.side,
+      position.quantity,
       position.entryPrice,
       trade.price,
     );
 
-    // 更新仓位
-    await this.prisma.$transaction(async (prisma) => {
-      // 更新仓位状态
+    const updatedTradeResult = await this.prisma.$transaction(async (prisma) => {
       await prisma.position.update({
         where: { id: position.id },
         data: {
-          amount: 0,
-          unrealizedPnl: 0,
-          realizedPnl: position.realizedPnl + pnl,
+          quantity: '0',
+          unrealizedPnl: '0',
+          realizedPnl: (Number(position.realizedPnl) + Number(pnl)).toString(),
         },
       });
 
-      // 更新订单状态
       await prisma.order.update({
         where: { id: order.id },
         data: {
@@ -536,226 +634,201 @@ export class TradeService {
         },
       });
 
-      // 更新交易状态
-      const updatedTrade = await prisma.trade.update({
+      const updatedTradeResult = await prisma.trade.update({
         where: { id: tradeId },
         data: {
-          profit: pnl,
-          profitPercent: (pnl / position.margin) * 100,
+          pnl: pnl.toString(),
+          profitPercent: Number(pnl) / Number(position.margin) * 100,
+        },
+        select: {
+          id: true,
+          userId: true,
+          symbol: true,
+          side: true,
+          amount: true,
+          price: true,
+          profitPercent: true,
+          pnl: true,
+          fee: true,
+          makerOrderId: true,
+          takerOrderId: true,
+          makerUserId: true,
+          takerUserId: true,
+          createdAt: true,
+          updatedAt: true,
+          user: true,
         },
       });
 
-      // 解冻保证金
       const [baseAsset, quoteAsset] = this.getAssetPair(trade.symbol);
       await this.assetService.unfreezeBalance(
         userId,
-        position.side === OrderSide.BUY ? quoteAsset : baseAsset,
-        position.margin + pnl,
+        order.side === OrderSide.BUY ? quoteAsset : baseAsset,
+        (Number(position.margin) + Number(pnl)).toString(),
       );
 
-      // 发送事件
-      this.eventEmitter.emit('trade.closed', this.mapTradeToResponse(updatedTrade));
-
-      return updatedTrade;
+      return updatedTradeResult;
     });
 
-    return this.mapTradeToResponse(trade);
+    const updatedTrade: Trade = {
+      id: updatedTradeResult.id,
+      userId: updatedTradeResult.userId,
+      symbol: updatedTradeResult.symbol,
+      side: updatedTradeResult.side as OrderSide,
+      amount: updatedTradeResult.amount,
+      price: updatedTradeResult.price,
+      profitPercent: updatedTradeResult.profitPercent || 0,
+      pnl: updatedTradeResult.pnl || '0',
+      fee: updatedTradeResult.fee || '0',
+      makerOrderId: updatedTradeResult.makerOrderId,
+      takerOrderId: updatedTradeResult.takerOrderId,
+      makerUserId: updatedTradeResult.makerUserId,
+      takerUserId: updatedTradeResult.takerUserId,
+      createdAt: updatedTradeResult.createdAt,
+      updatedAt: updatedTradeResult.updatedAt,
+    };
+
+    return this.mapTradeToResponse(updatedTrade);
   }
 
   private calculateUnrealizedPnl(
     side: string,
-    amount: number,
-    entryPrice: number,
-    currentPrice: number,
-  ): number {
+    amount: string,
+    entryPrice: string,
+    currentPrice: string,
+  ): string {
+    const amountNum = Number(amount);
+    const entryPriceNum = Number(entryPrice);
+    const currentPriceNum = Number(currentPrice);
     const direction = side === OrderSide.BUY ? 1 : -1;
-    return (currentPrice - entryPrice) * amount * direction;
+    const pnl = (currentPriceNum - entryPriceNum) * amountNum * direction;
+    return pnl.toString();
   }
 
   private async processTrades(trades: Trade[]) {
     for (const trade of trades) {
       await this.prisma.$transaction(async (prisma) => {
-        // 创建交易记录
-        const createdTrade = await prisma.trade.create({
-          data: {
-            id: uuidv4(),
-            symbol: trade.symbol,
-            makerOrderId: trade.makerOrderId,
-            takerOrderId: trade.takerOrderId,
-            makerUserId: trade.makerUserId,
-            takerUserId: trade.takerUserId,
-            price: trade.price,
-            amount: trade.amount,
-          },
-        });
-
-        // 更新maker订单
-        const makerOrder = await prisma.order.update({
-          where: { id: trade.makerOrderId },
-          data: {
-            filled: { increment: trade.amount },
-            status: this.getUpdatedOrderStatus(trade.amount),
-            updatedAt: new Date(),
-          },
-        });
-
-        // 更新taker订单
-        const takerOrder = await prisma.order.update({
-          where: { id: trade.takerOrderId },
-          data: {
-            filled: { increment: trade.amount },
-            status: this.getUpdatedOrderStatus(trade.amount),
-            updatedAt: new Date(),
-          },
-        });
-
-        // 更新或创建仓位
-        await this.updatePositions(prisma, createdTrade, makerOrder, takerOrder);
-
-        // 发送事件
-        this.eventEmitter.emit('trade.created', this.mapTradeToResponse(createdTrade));
-      });
-    }
-  }
-
-  private async updatePositions(
-    prisma: any,
-    trade: Trade,
-    makerOrder: Order,
-    takerOrder: Order,
-  ) {
-    // 更新maker仓位
-    await this.updateUserPosition(
-      prisma,
-      trade,
-      makerOrder.userId,
-      makerOrder.side,
-      makerOrder.leverage,
-      makerOrder.margin,
-      true,
-    );
-
-    // 更新taker仓位
-    await this.updateUserPosition(
-      prisma,
-      trade,
-      takerOrder.userId,
-      takerOrder.side,
-      takerOrder.leverage,
-      takerOrder.margin,
-      false,
-    );
-  }
-
-  private async updateUserPosition(
-    prisma: any,
-    trade: Trade,
-    userId: string,
-    side: OrderSide,
-    leverage: number,
-    margin: number,
-    isMaker: boolean,
-  ) {
-    // 风险检查
-    const isRiskValid = await this.riskService.checkPositionRisk(
-      userId,
-      trade.symbol,
-      side,
-      trade.amount,
-      leverage,
-      trade.price,
-    );
-
-    if (!isRiskValid) {
-      throw new BadRequestException('Position exceeds risk limits');
-    }
-
-    const position = await prisma.position.findFirst({
-      where: {
-        userId,
-        symbol: trade.symbol,
-        side,
-      },
-    });
-
-    if (!position) {
-      // 创建新仓位
-      const newPosition = await prisma.position.create({
-        data: {
-          id: uuidv4(),
-          userId,
+        const tradeData: TradeCreateData = {
+          user: { connect: { id: trade.userId } },
           symbol: trade.symbol,
-          side,
+          side: trade.side,
           amount: trade.amount,
-          entryPrice: trade.price,
-          markPrice: trade.price,
-          leverage,
-          margin,
-          liquidationPrice: this.calculateLiquidationPrice({
-            side,
-            entryPrice: trade.price,
-            leverage,
-            margin,
-          }),
-        },
-      });
+          price: trade.price,
+          profitPercent: trade.profitPercent || 0,
+          pnl: trade.pnl || '0',
+          fee: trade.fee || '0',
+          makerOrderId: trade.makerOrderId,
+          takerOrderId: trade.takerOrderId,
+          makerUserId: trade.makerUserId,
+          takerUserId: trade.takerUserId,
+        };
 
-      // 检查清算风险
-      await this.riskService.checkLiquidationRisk(newPosition.id);
-    } else {
-      // 更新现有仓位
-      const newAmount = position.amount + trade.amount;
-      const newEntryPrice = (position.entryPrice * position.amount + trade.price * trade.amount) / newAmount;
-      
-      const updatedPosition = await prisma.position.update({
-        where: { id: position.id },
-        data: {
-          amount: newAmount,
-          entryPrice: newEntryPrice,
-          markPrice: trade.price,
-          margin: position.margin + margin,
-          liquidationPrice: this.calculateLiquidationPrice({
-            side,
-            entryPrice: newEntryPrice,
-            leverage: position.leverage,
-            margin: position.margin + margin,
-          }),
-        },
-      });
+        const createdTradeResult = await prisma.trade.create({
+          data: tradeData,
+          include: {
+            user: true,
+          },
+        });
 
-      // 检查清算风险
-      await this.riskService.checkLiquidationRisk(updatedPosition.id);
+        if (createdTradeResult.makerOrderId) {
+          const makerOrder = await prisma.order.findUnique({
+            where: { id: createdTradeResult.makerOrderId },
+            include: {
+              user: true,
+              position: true,
+            },
+          });
+
+          if (makerOrder) {
+            const makerFilledQty = Number(makerOrder.filledQty);
+            const tradeAmount = Number(createdTradeResult.amount);
+            const newFilledQty = makerFilledQty + tradeAmount;
+            
+            const orderUpdateData: OrderUpdateData = {
+              filledQty: { set: newFilledQty.toString() },
+              status: { set: this.getUpdatedOrderStatus(newFilledQty) },
+            };
+
+            await prisma.order.update({
+              where: { id: createdTradeResult.makerOrderId },
+              data: orderUpdateData,
+            });
+          }
+        }
+
+        if (createdTradeResult.takerOrderId) {
+          const takerOrder = await prisma.order.findUnique({
+            where: { id: createdTradeResult.takerOrderId },
+            include: {
+              user: true,
+              position: true,
+            },
+          });
+
+          if (takerOrder) {
+            const takerFilledQty = Number(takerOrder.filledQty);
+            const tradeAmount = Number(createdTradeResult.amount);
+            const newFilledQty = takerFilledQty + tradeAmount;
+            
+            const orderUpdateData: OrderUpdateData = {
+              filledQty: { set: newFilledQty.toString() },
+              status: { set: this.getUpdatedOrderStatus(newFilledQty) },
+            };
+
+            await prisma.order.update({
+              where: { id: createdTradeResult.takerOrderId },
+              data: orderUpdateData,
+            });
+          }
+        }
+
+        return createdTradeResult;
+      });
     }
   }
 
-  private calculateRequiredMargin(price: number, amount: number, leverage: number): number {
-    return (price * amount) / leverage;
+  private calculateRequiredMargin(price: string, quantity: string, leverage: number): string {
+    return (parseFloat(price) * parseFloat(quantity) / leverage).toString();
   }
 
-  private calculateLiquidationPrice(position: any): number {
-    const maintenanceMargin = 0.005; // 0.5% 维持保证金率
-    const direction = position.side === OrderSide.BUY ? 1 : -1;
-    
-    return position.entryPrice * (1 - direction * (1 - maintenanceMargin) / position.leverage);
+  private calculateLiquidationPrice(params: {
+    side: string;
+    entryPrice: string;
+    margin: number;
+    leverage: number;
+  }): string {
+    const { side, entryPrice, margin, leverage } = params;
+    const entryPriceNum = Number(entryPrice);
+    const marginNum = margin;
+    const leverageNum = leverage;
+
+    let liquidationPrice: number;
+    if (side === OrderSide.BUY) {
+      liquidationPrice = entryPriceNum * (1 - marginNum / (entryPriceNum * leverageNum));
+    } else {
+      liquidationPrice = entryPriceNum * (1 + marginNum / (entryPriceNum * leverageNum));
+    }
+
+    return liquidationPrice.toString();
   }
 
-  private calculateMinMargin(position: Position): number {
-    const maintenanceMargin = 0.005; // 0.5% 维持保证金率
-    return position.entryPrice * position.amount * maintenanceMargin;
+  private calculateMinMargin(position: Position): string {
+    return (parseFloat(position.quantity) * parseFloat(position.entryPrice) / position.leverage * 0.5).toString();
   }
 
-  private getUpdatedOrderStatus(filled: number): OrderStatus {
-    return filled === 0 ? OrderStatus.PENDING :
-           filled < 1 ? OrderStatus.PARTIALLY_FILLED :
-           OrderStatus.FILLED;
+  private getUpdatedOrderStatus(filledQty: number): string {
+    if (filledQty === 0) {
+      return OrderStatus.PENDING;
+    } else if (filledQty > 0 && filledQty < 100) {
+      return OrderStatus.PARTIALLY_FILLED;
+    } else {
+      return OrderStatus.FILLED;
+    }
   }
 
   private getAssetPair(symbol: string): [string, string] {
-    const [base, quote] = symbol.split('-');
-    if (!base || !quote) {
-      throw new BadRequestException('Invalid symbol format');
-    }
-    return [base, quote];
+    const [baseAsset, quoteAsset] = symbol.split('-');
+    return [baseAsset, quoteAsset];
   }
 
   private mapOrderToResponse(order: any): OrderResponseDto {
@@ -763,38 +836,34 @@ export class TradeService {
       id: order.id,
       userId: order.userId,
       symbol: order.symbol,
-      side: order.side,
-      type: order.type,
+      side: order.side as OrderSide,
+      type: order.type as OrderType,
       price: order.price,
-      amount: order.amount,
-      filled: order.filled,
-      remaining: order.amount - order.filled,
-      status: order.status,
-      clientOrderId: order.clientOrderId,
+      quantity: order.quantity,
       leverage: order.leverage,
       margin: order.margin,
-      stopLoss: order.stopLoss,
-      takeProfit: order.takeProfit,
+      timeInForce: order.timeInForce,
+      status: order.status as OrderStatus,
+      filledQty: order.filledQty,
+      remainingQty: order.remainingQty,
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
     };
   }
 
-  private mapTradeToResponse(trade: any): TradeResponseDto {
+  private mapTradeToResponse(trade: Trade): TradeResponseDto {
     return {
       id: trade.id,
+      userId: trade.userId,
       symbol: trade.symbol,
-      makerOrderId: trade.makerOrderId,
-      takerOrderId: trade.takerOrderId,
-      makerUserId: trade.makerUserId,
-      takerUserId: trade.takerUserId,
-      price: trade.price,
+      side: trade.side as OrderSide,
       amount: trade.amount,
-      leverage: trade.leverage,
-      profit: trade.profit,
-      profitPercent: trade.profitPercent,
-      margin: trade.margin,
+      price: trade.price,
+      profitPercent: trade.profitPercent || 0,
+      pnl: trade.pnl || '0',
+      fee: trade.fee || '0',
       createdAt: trade.createdAt,
+      updatedAt: trade.updatedAt,
     };
   }
 
@@ -803,15 +872,12 @@ export class TradeService {
       id: position.id,
       userId: position.userId,
       symbol: position.symbol,
-      side: position.side,
-      amount: position.amount,
+      side: position.side as OrderSide,
+      quantity: position.quantity,
       entryPrice: position.entryPrice,
-      markPrice: position.markPrice,
       leverage: position.leverage,
-      margin: position.margin,
-      stopLoss: position.stopLoss,
-      takeProfit: position.takeProfit,
       liquidationPrice: position.liquidationPrice,
+      margin: position.margin,
       unrealizedPnl: position.unrealizedPnl,
       realizedPnl: position.realizedPnl,
       createdAt: position.createdAt,

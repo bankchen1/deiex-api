@@ -1,25 +1,23 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import { EventEmitterModule } from '@nestjs/event-emitter';
-import { ScheduleModule } from '@nestjs/schedule';
-import { MarketModule } from './modules/market/market.module';
+import { ConfigModule } from '@nestjs/config';
 import { PrismaModule } from './modules/prisma/prisma.module';
-import { AppRedisModule } from './shared/redis/redis.module';
-import { CacheModule } from '@nestjs/cache-manager';
+import { AuthModule } from './modules/auth/auth.module';
+import { MarketModule } from './modules/market/market.module';
+import { PerpetualModule } from './modules/perpetual/perpetual.module';
+import { RedisModule } from './modules/redis/redis.module';
+import { PrometheusModule } from './modules/shared/prometheus/prometheus.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
     }),
-    CacheModule.register({
-      isGlobal: true,
-    }),
-    EventEmitterModule.forRoot(),
-    ScheduleModule.forRoot(),
-    AppRedisModule,
     PrismaModule,
+    AuthModule,
     MarketModule,
+    PerpetualModule,
+    RedisModule,
+    PrometheusModule,
   ],
 })
 export class AppModule {}

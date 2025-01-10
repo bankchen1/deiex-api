@@ -1,196 +1,122 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { InjectRedis } from '@liaoliaots/nestjs-redis';
-import Redis from 'ioredis';
-import { EventEmitter2 } from '@nestjs/event-emitter';
-import { PrismaService } from '../../../modules/prisma/prisma.service';
-import { Order, OrderSide, OrderStatus, Trade } from '../types/trade.types';
-import { OrderBook, OrderBookLevel, MatchResult } from '../types/order-book.types';
-import { AssetService } from '../../asset/asset.service';
-import { ConfigService } from '@nestjs/config';
+import { OrderSide, OrderType, Order, Trade, MatchResult, OrderBook } from '../types/trade.types';
 
-@Injectable()
 export class OrderMatchingEngine {
-  private readonly logger = new Logger(OrderMatchingEngine.name);
-  private orderBooks: Map<string, OrderBook> = new Map();
-  private readonly depthLevels: number;
+  private bids: Map<string, Order[]> = new Map();
+  private asks: Map<string, Order[]> = new Map();
+  private symbol: string;
 
-  constructor(
-    private readonly prisma: PrismaService,
-    @InjectRedis() private readonly redis: Redis,
-    private readonly eventEmitter: EventEmitter2,
-    private readonly assetService: AssetService,
-    private readonly configService: ConfigService,
-  ) {
-    this.depthLevels = this.configService.get('DEPTH_LEVELS', 100);
+  constructor(symbol: string) {
+    this.symbol = symbol;
   }
 
-  async processOrder(order: Order): Promise<MatchResult> {
-    const symbol = order.symbol;
-    const orderBook = await this.getOrderBook(symbol);
-    const matchedOrders: MatchResult['matchedOrders'] = [];
-    let remainingAmount = order.amount;
+  addOrder(order: Order): void {
+    const orders = order.side === OrderSide.BUY ? this.bids : this.asks;
+    const priceLevel = orders.get(order.price) || [];
+    priceLevel.push(order);
+    orders.set(order.price, priceLevel);
+  }
 
-    try {
-      await this.redis.watch(`orderbook:${symbol}`);
+  cancelOrder(orderId: string): void {
+    this.removeOrder(orderId, this.bids);
+    this.removeOrder(orderId, this.asks);
+  }
 
-      const oppositeOrders = order.side === OrderSide.BUY 
-        ? orderBook.asks.levels
-        : orderBook.bids.levels;
+  private removeOrder(orderId: string, orders: Map<string, Order[]>): void {
+    for (const [price, priceLevel] of orders.entries()) {
+      const index = priceLevel.findIndex(order => order.id === orderId);
+      if (index !== -1) {
+        priceLevel.splice(index, 1);
+        if (priceLevel.length === 0) {
+          orders.delete(price);
+        }
+        break;
+      }
+    }
+  }
 
-      for (const level of oppositeOrders) {
-        if (remainingAmount <= 0) break;
-        
-        if (order.side === OrderSide.BUY && level.price > order.price) break;
-        if (order.side === OrderSide.SELL && level.price < order.price) break;
+  processOrder(order: Order): MatchResult {
+    const trades: Trade[] = [];
+    let remainingOrder: Order | undefined = order;
 
-        const matchAmount = Math.min(remainingAmount, level.amount);
-        if (matchAmount <= 0) continue;
+    if (order.type === OrderType.LIMIT) {
+      const matchingOrders = order.side === OrderSide.BUY ? this.asks : this.bids;
+      const sortedPrices = Array.from(matchingOrders.keys())
+        .map(price => parseFloat(price))
+        .sort(order.side === OrderSide.BUY ? (a, b) => a - b : (a, b) => b - a);
 
-        const trade = await this.executeTrade({
-          takerOrder: order,
-          makerPrice: level.price,
-          amount: matchAmount,
-        });
+      for (const price of sortedPrices) {
+        if (order.side === OrderSide.BUY && price > parseFloat(order.price)) break;
+        if (order.side === OrderSide.SELL && price < parseFloat(order.price)) break;
 
-        if (trade) {
-          matchedOrders.push({
-            orderId: trade.makerOrderId,
-            price: trade.price,
-            amount: trade.amount,
-            timestamp: trade.timestamp,
-          });
-          remainingAmount -= matchAmount;
-          
-          // 更新订单簿
-          await this.updateOrderBook(symbol, order.side, level.price, -matchAmount);
+        const priceLevel = matchingOrders.get(price.toString()) || [];
+        for (const matchingOrder of priceLevel) {
+          if (!remainingOrder) break;
+
+          const tradeAmount = Math.min(
+            parseFloat(remainingOrder.quantity),
+            parseFloat(matchingOrder.quantity),
+          );
+
+          if (tradeAmount > 0) {
+            trades.push({
+              id: '',
+              userId: remainingOrder.userId,
+              symbol: this.symbol,
+              side: remainingOrder.side,
+              amount: tradeAmount.toString(),
+              price: matchingOrder.price,
+              makerOrderId: matchingOrder.id,
+              takerOrderId: remainingOrder.id,
+              makerUserId: matchingOrder.userId,
+              takerUserId: remainingOrder.userId,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            });
+
+            const remainingQuantity = parseFloat(remainingOrder.quantity) - tradeAmount;
+            if (remainingQuantity > 0) {
+              remainingOrder = {
+                ...remainingOrder,
+                quantity: remainingQuantity.toString(),
+              };
+            } else {
+              remainingOrder = undefined;
+            }
+
+            const matchingRemaining = parseFloat(matchingOrder.quantity) - tradeAmount;
+            if (matchingRemaining > 0) {
+              matchingOrder.quantity = matchingRemaining.toString();
+            } else {
+              this.removeOrder(matchingOrder.id, matchingOrders);
+            }
+          }
         }
       }
-
-      // 如果是限价单且还有剩余数量，添加到订单簿
-      if (remainingAmount > 0 && order.type === 'LIMIT') {
-        await this.addToOrderBook(symbol, order, remainingAmount);
-      }
-
-      await this.redis.exec();
-
-      return {
-        orderId: order.id,
-        matchedOrders,
-        remainingAmount,
-        status: this.getOrderStatus(order.amount, remainingAmount),
-      };
-
-    } catch (error) {
-      this.logger.error(`Error processing order: ${error.message}`, error.stack);
-      throw error;
-    } finally {
-      await this.redis.unwatch();
-    }
-  }
-
-  private async executeTrade(params: {
-    takerOrder: Order;
-    makerPrice: number;
-    amount: number;
-  }): Promise<Trade> {
-    const { takerOrder, makerPrice, amount } = params;
-
-    return await this.prisma.$transaction(async (prisma) => {
-      // 1. 创建交易记录
-      const trade = await prisma.trade.create({
-        data: {
-          symbol: takerOrder.symbol,
-          price: makerPrice,
-          amount: amount,
-          takerId: takerOrder.userId,
-          takerSide: takerOrder.side,
-          takerOrderId: takerOrder.id,
-        },
-      });
-
-      // 2. 更新订单状态
-      await prisma.order.update({
-        where: { id: takerOrder.id },
-        data: {
-          filled: { increment: amount },
-          status: this.getOrderStatus(takerOrder.amount, takerOrder.filled + amount),
-        },
-      });
-
-      // 3. 发送交易事件
-      this.eventEmitter.emit('trade.executed', trade);
-
-      return trade;
-    });
-  }
-
-  private async getOrderBook(symbol: string): Promise<OrderBook> {
-    const cachedOrderBook = await this.redis.get(`orderbook:${symbol}`);
-    if (cachedOrderBook) {
-      return JSON.parse(cachedOrderBook);
     }
 
-    const orderBook = await this.buildOrderBook(symbol);
-    await this.redis.set(
-      `orderbook:${symbol}`,
-      JSON.stringify(orderBook),
-      'EX',
-      60
-    );
+    if (remainingOrder && remainingOrder.type === OrderType.LIMIT) {
+      this.addOrder(remainingOrder);
+    }
 
-    return orderBook;
+    return { trades, remainingOrder };
   }
 
-  private async buildOrderBook(symbol: string): Promise<OrderBook> {
-    const [bids, asks] = await Promise.all([
-      this.prisma.order.groupBy({
-        by: ['price'],
-        where: {
-          symbol,
-          side: OrderSide.BUY,
-          status: { in: ['OPEN', 'PARTIALLY_FILLED'] },
-        },
-        _sum: { remainingAmount: true },
-        _count: { id: true },
-        orderBy: { price: 'desc' },
-        take: this.depthLevels,
-      }),
-      this.prisma.order.groupBy({
-        by: ['price'],
-        where: {
-          symbol,
-          side: OrderSide.SELL,
-          status: { in: ['OPEN', 'PARTIALLY_FILLED'] },
-        },
-        _sum: { remainingAmount: true },
-        _count: { id: true },
-        orderBy: { price: 'asc' },
-        take: this.depthLevels,
-      }),
-    ]);
+  getOrderBookSnapshot(): OrderBook {
+    const bids = Array.from(this.bids.entries()).map(([price, orders]) => ({
+      price,
+      quantity: orders.reduce((sum, order) => sum + parseFloat(order.quantity), 0).toString(),
+      total: orders.length.toString(),
+    }));
+
+    const asks = Array.from(this.asks.entries()).map(([price, orders]) => ({
+      price,
+      quantity: orders.reduce((sum, order) => sum + parseFloat(order.quantity), 0).toString(),
+      total: orders.length.toString(),
+    }));
 
     return {
-      symbol,
-      bids: this.buildOrderBookSide(bids),
-      asks: this.buildOrderBookSide(asks),
-      timestamp: Date.now(),
-      lastUpdateId: await this.getLastUpdateId(symbol),
+      bids: bids.sort((a, b) => parseFloat(b.price) - parseFloat(a.price)),
+      asks: asks.sort((a, b) => parseFloat(a.price) - parseFloat(b.price)),
     };
-  }
-
-  private getOrderStatus(total: number, filled: number): OrderStatus {
-    if (filled >= total) return OrderStatus.FILLED;
-    if (filled > 0) return OrderStatus.PARTIALLY_FILLED;
-    return OrderStatus.OPEN;
-  }
-
-  @OnEvent('order.canceled')
-  async handleOrderCanceled(order: Order) {
-    await this.updateOrderBook(
-      order.symbol,
-      order.side,
-      order.price,
-      -order.remainingAmount
-    );
   }
 }

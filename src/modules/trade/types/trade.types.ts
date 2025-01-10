@@ -1,129 +1,129 @@
+import { Prisma } from '@prisma/client';
+
 export enum OrderSide {
-  BUY = 'buy',
-  SELL = 'sell',
+  BUY = 'BUY',
+  SELL = 'SELL',
 }
 
 export enum OrderType {
-  LIMIT = 'limit',
-  MARKET = 'market',
-  STOP_LIMIT = 'stop_limit',
-  STOP_MARKET = 'stop_market',
+  LIMIT = 'LIMIT',
+  MARKET = 'MARKET',
 }
 
 export enum OrderStatus {
-  PENDING = 'pending',
-  PARTIALLY_FILLED = 'partially_filled',
-  FILLED = 'filled',
-  CANCELLED = 'cancelled',
-  REJECTED = 'rejected',
-  EXPIRED = 'expired',
+  PENDING = 'PENDING',
+  PARTIALLY_FILLED = 'PARTIALLY_FILLED',
+  FILLED = 'FILLED',
+  CANCELLED = 'CANCELLED',
+  REJECTED = 'REJECTED',
 }
 
-export enum OrderTimeInForce {
-  GTC = 'GTC', // Good Till Cancel
-  IOC = 'IOC', // Immediate or Cancel
-  FOK = 'FOK', // Fill or Kill
-}
-
-export interface Order {
+export type Trade = {
   id: string;
   userId: string;
-  clientOrderId?: string;
   symbol: string;
-  side: OrderSide;
-  type: OrderType;
-  price: number;
-  amount: number;
-  filled: number;
-  remaining?: number;
-  status: OrderStatus;
-  timeInForce?: OrderTimeInForce;
-  stopPrice?: number;
-  leverage?: number;
-  margin?: number;
-  stopLoss?: number;
-  takeProfit?: number;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-export interface Trade {
-  id: string;
-  symbol: string;
+  side: string;
+  amount: string;
+  price: string;
+  profitPercent?: number;
+  pnl?: string;
+  fee?: string;
   makerOrderId: string;
   takerOrderId: string;
   makerUserId: string;
   takerUserId: string;
-  price: number;
-  amount: number;
-  leverage?: number;
-  profit?: number;
-  profitPercent?: number;
-  margin?: number;
   createdAt: Date;
-}
+  updatedAt: Date;
+  user?: {
+    id: string;
+    email: string;
+    username: string;
+    createdAt: Date;
+    updatedAt: Date;
+  };
+};
 
-export interface Position {
+export type Order = {
   id: string;
   userId: string;
   symbol: string;
-  side: OrderSide;
-  amount: number;
-  entryPrice: number;
-  markPrice: number;
+  side: string;
+  type: string;
+  price: string;
+  quantity: string;
   leverage: number;
-  margin: number;
-  stopLoss?: number;
-  takeProfit?: number;
-  liquidationPrice: number;
-  unrealizedPnl: number;
-  realizedPnl: number;
+  margin: string;
+  timeInForce: string;
+  status: string;
+  filledQty: string;
+  remainingQty?: string | null;
   createdAt: Date;
   updatedAt: Date;
-}
+  positionId?: string | null;
+  user?: {
+    id: string;
+    email: string;
+    username: string;
+    createdAt: Date;
+    updatedAt: Date;
+  };
+  position?: Position;
+};
 
-export interface OrderBookLevel {
-  price: number;
-  amount: number;
-  count: number;
-}
-
-export interface OrderBook {
+export type Position = {
+  id: string;
+  userId: string;
   symbol: string;
-  bids: OrderBookLevel[];
-  asks: OrderBookLevel[];
-  timestamp: number;
-}
+  side: string;
+  quantity: string;
+  entryPrice: string;
+  leverage: number;
+  liquidationPrice: string;
+  margin: string;
+  unrealizedPnl: string;
+  realizedPnl: string;
+  createdAt: Date;
+  updatedAt: Date;
+  user?: {
+    id: string;
+    email: string;
+    username: string;
+    createdAt: Date;
+    updatedAt: Date;
+  };
+  orders?: Order[];
+};
 
-export interface TradeStatistics {
-  symbol: string;
-  price: number;
-  volume: number;
-  high: number;
-  low: number;
-  change: number;
-  changePercent: number;
-}
-
-export interface OrderMatchResult {
+export interface MatchResult {
   trades: Trade[];
   remainingOrder?: Order;
 }
 
-export interface OrderBookUpdate {
-  symbol: string;
-  side: OrderSide;
-  price: number;
-  amount: number;
-  timestamp: number;
+export interface OrderBookEntry {
+  price: string;
+  quantity: string;
+  total: string;
 }
 
-export interface WebSocketSubscription {
-  symbol: string;
-  channel: 'orderbook' | 'trades' | 'ticker';
+export interface OrderBook {
+  bids: OrderBookEntry[];
+  asks: OrderBookEntry[];
 }
 
-export interface WebSocketMessage<T = any> {
-  event: string;
-  data: T;
+export interface TradingPair {
+  id?: string;
+  symbol: string;
+  baseAsset: string;
+  quoteAsset: string;
+  isActive: boolean;
+  createdAt?: Date;
+  updatedAt?: Date;
 }
+
+export type TradeCreateData = Prisma.TradeCreateInput;
+export type OrderCreateData = Prisma.OrderCreateInput;
+export type PositionCreateData = Prisma.PositionCreateInput;
+
+export type TradeUpdateData = Prisma.TradeUpdateInput;
+export type OrderUpdateData = Prisma.OrderUpdateInput;
+export type PositionUpdateData = Prisma.PositionUpdateInput;
