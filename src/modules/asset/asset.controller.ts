@@ -1,134 +1,60 @@
-import { 
-  Controller, 
-  Get, 
-  Post, 
-  Body, 
-  UseGuards, 
-  Query,
-  Param,
-  ParseUUIDPipe,
-  ValidationPipe,
-  BadRequestException,
-  NotFoundException,
-} from '@nestjs/common';
-import { 
-  ApiTags, 
-  ApiOperation, 
-  ApiResponse, 
-  ApiBearerAuth,
-  ApiParam,
-  ApiQuery 
-} from '@nestjs/swagger';
+import { Controller, Get, Post, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { AssetService } from './asset.service';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { 
-  AssetDto,
-  TransactionDto,
-  WithdrawDto, 
-  DepositDto,
-  TransactionQueryDto,
-  BalanceQueryDto
-} from './dto/asset.dto';
+import { CreateDepositDto, CreateWithdrawDto, TransactionQueryDto } from './dto/asset.dto';
+import { JwtAuthGuard } from '../../modules/auth/guards/jwt-auth.guard';
+import { User } from '../../decorators/user.decorator';
 
-@ApiTags('Asset')
+@ApiTags('资产')
 @Controller('assets')
 @UseGuards(JwtAuthGuard)
-@ApiBearerAuth()
 export class AssetController {
   constructor(private readonly assetService: AssetService) {}
 
   @Get('balances')
-  @ApiOperation({ summary: 'Get user balances' })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Returns user balances',
-    type: [AssetDto]
-  })
-  async getUserBalances(
-    @CurrentUser('id') userId: string,
-    @Query(ValidationPipe) query: BalanceQueryDto
-  ): Promise<AssetDto[]> {
-    return this.assetService.getUserBalances(userId, query);
+  @ApiOperation({ summary: '获取用户所有资产余额' })
+  @ApiResponse({ status: 200, description: '成功获取用户资产余额' })
+  async getUserBalances(@User('id') userId: string) {
+    return this.assetService.getUserBalances(userId);
   }
 
-  @Get('balance/:currency')
-  @ApiOperation({ summary: 'Get user balance for specific currency' })
-  @ApiParam({ name: 'currency', description: 'Currency code (e.g., BTC, ETH, USDT)' })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Returns user balance for the specified currency',
-    type: AssetDto
-  })
+  @Get('balances/:currency')
+  @ApiOperation({ summary: '获取用户指定币种余额' })
+  @ApiResponse({ status: 200, description: '成功获取用户指定币种余额' })
   async getUserBalance(
-    @CurrentUser('id') userId: string,
-    @Param('currency') currency: string
-  ): Promise<AssetDto> {
+    @User('id') userId: string,
+    @Param('currency') currency: string,
+  ) {
     return this.assetService.getUserBalance(userId, currency);
   }
 
-  @Post('deposit')
-  @ApiOperation({ summary: 'Create deposit' })
-  @ApiResponse({ 
-    status: 201, 
-    description: 'Deposit created successfully',
-    type: TransactionDto
-  })
+  @Post('deposits')
+  @ApiOperation({ summary: '创建充值记录' })
+  @ApiResponse({ status: 201, description: '成功创建充值记录' })
   async createDeposit(
-    @CurrentUser('id') userId: string,
-    @Body(ValidationPipe) depositDto: DepositDto
-  ): Promise<TransactionDto> {
-    return this.assetService.createDeposit(userId, depositDto);
+    @User('id') userId: string,
+    @Body() createDepositDto: CreateDepositDto,
+  ) {
+    return this.assetService.createDeposit(userId, createDepositDto);
   }
 
-  @Post('withdraw')
-  @ApiOperation({ summary: 'Create withdrawal request' })
-  @ApiResponse({ 
-    status: 201, 
-    description: 'Withdrawal request created successfully',
-    type: TransactionDto
-  })
-  @ApiResponse({ 
-    status: 400, 
-    description: 'Insufficient balance or invalid withdrawal amount'
-  })
-  async createWithdrawal(
-    @CurrentUser('id') userId: string,
-    @Body(ValidationPipe) withdrawDto: WithdrawDto
-  ): Promise<TransactionDto> {
-    return this.assetService.createWithdrawal(userId, withdrawDto);
+  @Post('withdraws')
+  @ApiOperation({ summary: '创建提现记录' })
+  @ApiResponse({ status: 201, description: '成功创建提现记录' })
+  async createWithdraw(
+    @User('id') userId: string,
+    @Body() createWithdrawDto: CreateWithdrawDto,
+  ) {
+    return this.assetService.createWithdraw(userId, createWithdrawDto);
   }
 
   @Get('transactions')
-  @ApiOperation({ summary: 'Get transaction history' })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Returns transaction history',
-    type: [TransactionDto]
-  })
-  async getTransactionHistory(
-    @CurrentUser('id') userId: string,
-    @Query(ValidationPipe) query: TransactionQueryDto
-  ): Promise<TransactionDto[]> {
-    return this.assetService.getTransactionHistory(userId, query);
-  }
-
-  @Get('transaction/:id')
-  @ApiOperation({ summary: 'Get transaction details' })
-  @ApiParam({ name: 'id', description: 'Transaction ID' })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Returns transaction details',
-    type: TransactionDto
-  })
-  async getTransaction(
-    @CurrentUser('id') userId: string,
-    @Param('id', ParseUUIDPipe) transactionId: string
-  ): Promise<TransactionDto> {
-    const transaction = await this.assetService.getTransaction(transactionId);
-    if (transaction.userId !== userId) {
-      throw new NotFoundException('Transaction not found');
-    }
-    return transaction;
+  @ApiOperation({ summary: '获取交易记录' })
+  @ApiResponse({ status: 200, description: '成功获取交易记录' })
+  async getTransactions(
+    @User('id') userId: string,
+    @Query() query: TransactionQueryDto,
+  ) {
+    return this.assetService.getTransactions(userId, query);
   }
 }

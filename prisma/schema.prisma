@@ -11,132 +11,44 @@ datasource db {
 }
 
 model User {
-  id            String    @id @default(uuid())
-  email         String    @unique
-  username      String    @unique
-  password      String
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  balances      Balance[]
-  transactions  WalletTransaction[]
-  whitelistAddresses AddressWhitelist[]
-  withdrawalLimits WithdrawalLimit[]
-  wallets       Wallet[]
-}
-
-model Wallet {
   id        String   @id @default(uuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
-  currency  String
-  address   String
-  available String   @default("0")
-  locked    String   @default("0")
+  email     String   @unique
+  password  String
+  role      String   @default("user")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([userId, currency])
+  assets       Asset[]
+  transactions Transaction[]
 }
 
-model Balance {
+model Asset {
   id        String   @id @default(uuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id])
-  available String   @default("0")
-  locked    String   @default("0")
   currency  String
+  available Decimal  @default(0)
+  locked    Decimal  @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([userId, currency])
-}
-
-model WalletTransaction {
-  id            String   @id @default(uuid())
-  userId        String
-  user          User     @relation(fields: [userId], references: [id])
-  type          String   // DEPOSIT, WITHDRAW
-  status        String   // PENDING, PROCESSING, COMPLETED, FAILED
-  currency      String
-  amount        String
-  fee           String?
-  txHash        String?
-  address       String?
-  chain         String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  @@index([userId])
-  @@index([txHash])
-}
-
-model AddressWhitelist {
-  id            String   @id @default(uuid())
-  userId        String
-  user          User     @relation(fields: [userId], references: [id])
-  currency      String
-  address       String
-  chain         String
-  label         String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  @@unique([userId, currency, address, chain])
-}
-
-model WithdrawalLimit {
-  id              String   @id @default(uuid())
-  userId          String
-  user            User     @relation(fields: [userId], references: [id])
-  currency        String
-  dailyLimit      String
-  dailyUsed       String   @default("0")
-  monthlyLimit    String
-  monthlyUsed     String   @default("0")
-  lastResetDaily  DateTime @default(now())
-  lastResetMonthly DateTime @default(now())
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id])
 
   @@unique([userId, currency])
 }
 
-model CurrencyConfig {
-  id            String   @id @default(uuid())
-  symbol        String   @unique
-  name          String
-  decimals      Int
-  minDeposit    String
-  minWithdraw   String
-  withdrawFee   String
-  isActive      Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-}
+model Transaction {
+  id        String   @id @default(uuid())
+  userId    String
+  currency  String
+  type      String   // DEPOSIT, WITHDRAW
+  amount    Decimal
+  fee       Decimal? // 手续费
+  status    String   // PENDING, PROCESSING, COMPLETED, FAILED
+  address   String?  // 区块链地址
+  chain     String?  // 区块链网络
+  txHash    String?  // 区块链交易哈希
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-model ChainConfig {
-  id            String   @id @default(uuid())
-  chain         String   @unique
-  name          String
-  rpcUrl        String
-  explorerUrl   String
-  isActive      Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-}
-
-model WalletAuditLog {
-  id            String   @id @default(uuid())
-  userId        String
-  walletId      String
-  action        String
-  changes       Json
-  reason        String?
-  operator      String
-  ipAddress     String
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  @@index([userId])
-  @@index([walletId])
+  user User @relation(fields: [userId], references: [id])
 }
