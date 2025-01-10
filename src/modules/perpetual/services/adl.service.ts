@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRedis } from '@nestjs-modules/ioredis';
 import Redis from 'ioredis';
-import { PrometheusService } from '../../shared/prometheus/prometheus.service';
+import { PrometheusService } from '../../../modules/prometheus/prometheus.service';
 import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()

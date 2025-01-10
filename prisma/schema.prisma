@@ -17,13 +17,25 @@ model User {
   password      String
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
-  orders        Order[]
-  positions     Position[]
   balances      Balance[]
-  trades        Trade[]
   transactions  WalletTransaction[]
   whitelistAddresses AddressWhitelist[]
   withdrawalLimits WithdrawalLimit[]
+  wallets       Wallet[]
+}
+
+model Wallet {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  currency  String
+  address   String
+  available String   @default("0")
+  locked    String   @default("0")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, currency])
 }
 
 model Balance {
@@ -37,74 +49,6 @@ model Balance {
   updatedAt DateTime @updatedAt
 
   @@unique([userId, currency])
-}
-
-model Order {
-  id            String   @id @default(uuid())
-  userId        String
-  user          User     @relation(fields: [userId], references: [id])
-  symbol        String
-  side          String
-  type          String
-  price         String
-  quantity      String
-  leverage      Int
-  margin        String
-  timeInForce   String
-  status        String
-  filledQty     String   @default("0")
-  remainingQty  String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  position      Position? @relation(fields: [positionId], references: [id])
-  positionId    String?
-}
-
-model Position {
-  id              String   @id @default(uuid())
-  userId          String
-  user            User     @relation(fields: [userId], references: [id])
-  symbol          String
-  side            String
-  quantity        String
-  entryPrice      String
-  leverage        Int
-  liquidationPrice String
-  margin          String
-  unrealizedPnl   String
-  realizedPnl     String
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  orders          Order[]
-
-  @@unique([userId, symbol, side], name: "userId_symbol_side")
-}
-
-model Trade {
-  id            String   @id @default(uuid())
-  userId        String
-  user          User     @relation(fields: [userId], references: [id])
-  symbol        String
-  side          String
-  amount        String
-  price         String
-  profitPercent Float?
-  pnl           String?
-  fee           String?
-  makerOrderId  String?
-  takerOrderId  String?
-  makerUserId   String?
-  takerUserId   String?
-  orderId       String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  @@index([userId])
-  @@index([orderId])
-  @@index([makerOrderId])
-  @@index([takerOrderId])
-  @@index([makerUserId])
-  @@index([takerUserId])
 }
 
 model WalletTransaction {
@@ -121,6 +65,9 @@ model WalletTransaction {
   chain         String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+
+  @@index([userId])
+  @@index([txHash])
 }
 
 model AddressWhitelist {
@@ -138,15 +85,18 @@ model AddressWhitelist {
 }
 
 model WithdrawalLimit {
-  id            String   @id @default(uuid())
-  userId        String
-  user          User     @relation(fields: [userId], references: [id])
-  currency      String
-  dailyLimit    String
-  dailyUsed     String   @default("0")
-  lastResetDate DateTime @default(now())
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  currency        String
+  dailyLimit      String
+  dailyUsed       String   @default("0")
+  monthlyLimit    String
+  monthlyUsed     String   @default("0")
+  lastResetDaily  DateTime @default(now())
+  lastResetMonthly DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   @@unique([userId, currency])
 }
@@ -175,20 +125,18 @@ model ChainConfig {
   updatedAt     DateTime @updatedAt
 }
 
-model ChainScanStatus {
+model WalletAuditLog {
   id            String   @id @default(uuid())
-  chain         String   @unique
-  lastBlock     BigInt
+  userId        String
+  walletId      String
+  action        String
+  changes       Json
+  reason        String?
+  operator      String
+  ipAddress     String
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
-}
 
-model TradingPair {
-  id        String   @id @default(uuid())
-  symbol    String   @unique
-  baseAsset String
-  quoteAsset String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  @@index([userId])
+  @@index([walletId])
 }

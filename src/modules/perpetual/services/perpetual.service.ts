@@ -1,10 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRedis } from '@nestjs-modules/ioredis';
 import Redis from 'ioredis';
-import { PrometheusService } from '../../shared/prometheus/prometheus.service';
-import { RiskManagementService } from './risk-management.service';
-import { ADLService } from './adl.service';
+import { PrometheusService } from '../../../modules/prometheus/prometheus.service';
+import { RiskManagementService } from '../services/risk-management.service';
+import { ADLService } from '../services/adl.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { BigNumber } from 'bignumber.js';
 
 @Injectable()
 export class PerpetualService {
@@ -44,10 +45,9 @@ export class PerpetualService {
       });
 
       // Track metrics
-      this.prometheusService.incrementOrderCount(
-        order.symbol,
-        order.side,
+      this.prometheusService.incrementOrderCounter(
         order.type,
+        order.status,
       );
 
       return order;
@@ -74,13 +74,25 @@ export class PerpetualService {
       },
     });
 
-    if (!balance || parseFloat(balance.available) < parseFloat(orderData.margin)) {
+    if (!balance || new BigNumber(balance.available).isLessThan(orderData.margin)) {
       throw new Error('Insufficient margin');
     }
   }
 
   private async lockMargin(userId: string, orderData: any) {
-    // Lock margin for the order
+    const balance = await this.prisma.balance.findUnique({
+      where: {
+        userId_currency: {
+          userId,
+          currency: 'USDT',
+        },
+      },
+    });
+
+    if (!balance) {
+      throw new Error('Balance not found');
+    }
+
     await this.prisma.balance.update({
       where: {
         userId_currency: {
@@ -89,18 +101,26 @@ export class PerpetualService {
         },
       },
       data: {
-        available: {
-          decrement: orderData.margin,
-        },
-        locked: {
-          increment: orderData.margin,
-        },
+        available: new BigNumber(balance.available).minus(orderData.margin).toString(),
+        locked: new BigNumber(balance.locked).plus(orderData.margin).toString(),
       },
     });
   }
 
   private async unlockMargin(userId: string, orderData: any) {
-    // Unlock margin if order fails
+    const balance = await this.prisma.balance.findUnique({
+      where: {
+        userId_currency: {
+          userId,
+          currency: 'USDT',
+        },
+      },
+    });
+
+    if (!balance) {
+      throw new Error('Balance not found');
+    }
+
     await this.prisma.balance.update({
       where: {
         userId_currency: {
@@ -109,12 +129,8 @@ export class PerpetualService {
         },
       },
       data: {
-        available: {
-          increment: orderData.margin,
-        },
-        locked: {
-          decrement: orderData.margin,
-        },
+        available: new BigNumber(balance.available).plus(orderData.margin).toString(),
+        locked: new BigNumber(balance.locked).minus(orderData.margin).toString(),
       },
     });
   }

@@ -31,7 +31,8 @@
   ],
   "author": "",
   "dependencies": {
-    "@nestjs-modules/ioredis": "^1.0.1",
+    "@liaoliaots/nestjs-redis": "^10.0.0",
+    "@nestjs-modules/ioredis": "^2.0.2",
     "@nestjs/cache-manager": "^2.3.0",
     "@nestjs/common": "^10.0.0",
     "@nestjs/config": "^3.1.1",

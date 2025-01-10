@@ -2,8 +2,10 @@ import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { InjectRedis } from '@nestjs-modules/ioredis';
 import Redis from 'ioredis';
 import { TradeService } from '../../trade/trade.service';
-import { StatisticsQueryDto, TimeFrame, TradingMetricsResponse, WinRateResponse } from '../dto/statistics.dto';
-import { TradeHistoryDto, TradeResponseDto } from '../../trade/dto/trade.dto';
+import { StatisticsQueryDto } from '../dto/statistics.dto';
+import { TradingMetricsResponse } from '../dto/trading-metrics.dto';
+import { TradeResponseDto } from '../../trade/dto/trade.dto';
+import { BigNumber } from 'bignumber.js';
 
 @Injectable()
 export class StatisticsService {
@@ -31,55 +33,62 @@ export class StatisticsService {
       return JSON.parse(cached);
     }
 
-    // Convert dates to timestamps
-    const startTime = query.startTime ? new Date(query.startTime).getTime() : undefined;
-    const endTime = query.endTime ? new Date(query.endTime).getTime() : undefined;
-
-    if (startTime && endTime && startTime > endTime) {
-      throw new BadRequestException('Start time must be before end time');
+    let filteredTrades = await this.tradeService.getUserTrades(userId, query.symbol);
+    if (query.startTime) {
+      const startDate = new Date(query.startTime);
+      filteredTrades = filteredTrades.filter(trade => trade.createdAt >= startDate);
+    }
+    if (query.endTime) {
+      const endDate = new Date(query.endTime);
+      filteredTrades = filteredTrades.filter(trade => trade.createdAt <= endDate);
     }
 
-    // Get trades from database
-    const tradesResult = await this.tradeService.getUserTrades(userId, {
-      symbol: query.symbol,
-      startTime,
-      endTime,
-    });
-
-    const trades = tradesResult.trades;
-    
-    if (!trades.length) {
+    if (filteredTrades.length === 0) {
       return {
         totalTrades: 0,
-        profitableTrades: 0,
-        unprofitableTrades: 0,
+        winningTrades: 0,
+        losingTrades: 0,
         winRate: '0.00',
-        totalPnL: '0.00000000',
-        averageProfit: '0.00000000',
-        averageLoss: '0.00000000',
-        maxConsecutiveWins: 0,
-        maxConsecutiveLosses: 0,
+        totalPnl: '0.00',
+        averagePnl: '0.00',
+        largestWin: '0.00',
+        largestLoss: '0.00',
+        averageWin: '0.00',
+        averageLoss: '0.00',
         profitFactor: '0.00',
+        maxDrawdown: '0.00',
         sharpeRatio: '0.00',
       };
     }
 
     // Calculate metrics
-    const profitableTrades = trades.filter(t => this.isProfitableTrade(t));
-    const unprofitableTrades = trades.filter(t => this.isUnprofitableTrade(t));
+    const winningTrades = filteredTrades.filter(t => this.isProfitableTrade(t));
+    const losingTrades = filteredTrades.filter(t => this.isUnprofitableTrade(t));
+
+    const totalPnl = this.calculateTotalPnL(filteredTrades);
+    const averagePnl = new BigNumber(totalPnl).dividedBy(filteredTrades.length).toFixed(2);
+    const largestWin = this.calculateLargestWin(winningTrades);
+    const largestLoss = this.calculateLargestLoss(losingTrades);
+    const averageWin = this.calculateAverageProfit(winningTrades);
+    const averageLoss = this.calculateAverageLoss(losingTrades);
+    const profitFactor = this.calculateProfitFactor(filteredTrades);
+    const maxDrawdown = this.calculateMaxDrawdown(filteredTrades);
+    const sharpeRatio = this.calculateSharpeRatio(filteredTrades);
 
     const metrics: TradingMetricsResponse = {
-      totalTrades: trades.length,
-      profitableTrades: profitableTrades.length,
-      unprofitableTrades: unprofitableTrades.length,
-      winRate: this.calculateWinRate(profitableTrades.length, trades.length),
-      totalPnL: this.calculateTotalPnL(trades),
-      averageProfit: this.calculateAverageProfit(profitableTrades),
-      averageLoss: this.calculateAverageLoss(unprofitableTrades),
-      maxConsecutiveWins: this.calculateMaxConsecutive(trades, true),
-      maxConsecutiveLosses: this.calculateMaxConsecutive(trades, false),
-      profitFactor: this.calculateProfitFactor(trades),
-      sharpeRatio: this.calculateSharpeRatio(trades),
+      totalTrades: filteredTrades.length,
+      winningTrades: winningTrades.length,
+      losingTrades: losingTrades.length,
+      winRate: this.calculateWinRate(winningTrades.length, filteredTrades.length),
+      totalPnl,
+      averagePnl,
+      largestWin,
+      largestLoss,
+      averageWin,
+      averageLoss,
+      profitFactor,
+      maxDrawdown,
+      sharpeRatio,
     };
 
     // Cache the result
@@ -88,124 +97,101 @@ export class StatisticsService {
     return metrics;
   }
 
-  async getWinRate(
-    userId: string,
-    query: StatisticsQueryDto,
-  ): Promise<WinRateResponse> {
-    if (!userId) {
-      throw new BadRequestException('User ID is required');
-    }
-
-    const cacheKey = `winrate:${userId}:${query.symbol}:${query.timeFrame}`;
-    
-    // Try to get from cache
-    const cached = await this.redis.get(cacheKey);
-    if (cached) {
-      return JSON.parse(cached);
-    }
-
-    // Convert dates to timestamps
-    const startTime = query.startTime ? new Date(query.startTime).getTime() : undefined;
-    const endTime = query.endTime ? new Date(query.endTime).getTime() : undefined;
-
-    if (startTime && endTime && startTime > endTime) {
-      throw new BadRequestException('Start time must be before end time');
-    }
-
-    // Get trades from database
-    const tradesResult = await this.tradeService.getUserTrades(userId, {
-      symbol: query.symbol,
-      startTime,
-      endTime,
-    });
-
-    const trades = tradesResult.trades;
-    const profitableTrades = trades.filter(t => this.isProfitableTrade(t));
-
-    const response: WinRateResponse = {
-      symbol: query.symbol || 'ALL',
-      winRate: this.calculateWinRate(profitableTrades.length, trades.length),
-      totalTrades: trades.length,
-      timeFrame: query.timeFrame || TimeFrame.MONTH,
-    };
-
-    // Cache the result
-    await this.redis.set(cacheKey, JSON.stringify(response), 'EX', this.CACHE_TTL);
-
-    return response;
-  }
-
   private isProfitableTrade(trade: TradeResponseDto): boolean {
-    return parseFloat(trade.pnl || '0') > 0;
+    return new BigNumber(trade.pnl || '0').isGreaterThan(0);
   }
 
   private isUnprofitableTrade(trade: TradeResponseDto): boolean {
-    return parseFloat(trade.pnl || '0') < 0;
+    return new BigNumber(trade.pnl || '0').isLessThan(0);
   }
 
-  private calculateWinRate(profitableCount: number, totalCount: number): string {
+  private calculateWinRate(winningCount: number, totalCount: number): string {
     if (totalCount === 0) return '0.00';
-    return ((profitableCount / totalCount) * 100).toFixed(2);
+    return ((winningCount / totalCount) * 100).toFixed(2);
   }
 
   private calculateTotalPnL(trades: TradeResponseDto[]): string {
     return trades
-      .reduce((sum, t) => sum + parseFloat(t.pnl || '0'), 0)
-      .toFixed(8);
+      .reduce((sum, t) => sum.plus(t.pnl || '0'), new BigNumber(0))
+      .toFixed(2);
   }
 
-  private calculateAverageProfit(profitableTrades: TradeResponseDto[]): string {
-    if (!profitableTrades.length) return '0.00000000';
-    const totalProfit = profitableTrades.reduce((sum, t) => sum + parseFloat(t.pnl || '0'), 0);
-    return (totalProfit / profitableTrades.length).toFixed(8);
+  private calculateLargestWin(winningTrades: TradeResponseDto[]): string {
+    if (!winningTrades.length) return '0.00';
+    return winningTrades
+      .reduce((max, t) => BigNumber.max(max, new BigNumber(t.pnl || '0')), new BigNumber(0))
+      .toFixed(2);
   }
 
-  private calculateAverageLoss(unprofitableTrades: TradeResponseDto[]): string {
-    if (!unprofitableTrades.length) return '0.00000000';
-    const totalLoss = unprofitableTrades.reduce((sum, t) => sum + parseFloat(t.pnl || '0'), 0);
-    return (totalLoss / unprofitableTrades.length).toFixed(8);
+  private calculateLargestLoss(losingTrades: TradeResponseDto[]): string {
+    if (!losingTrades.length) return '0.00';
+    return losingTrades
+      .reduce((min, t) => BigNumber.min(min, new BigNumber(t.pnl || '0')), new BigNumber(0))
+      .toFixed(2);
   }
 
-  private calculateMaxConsecutive(trades: TradeResponseDto[], profitable: boolean): number {
-    let max = 0;
-    let current = 0;
-    
-    for (const trade of trades) {
-      const isProfitable = this.isProfitableTrade(trade);
-      if (isProfitable === profitable) {
-        current++;
-        max = Math.max(max, current);
-      } else {
-        current = 0;
+  private calculateAverageProfit(winningTrades: TradeResponseDto[]): string {
+    if (!winningTrades.length) return '0.00';
+    const totalProfit = winningTrades.reduce((sum, t) => sum.plus(t.pnl || '0'), new BigNumber(0));
+    return totalProfit.dividedBy(winningTrades.length).toFixed(2);
+  }
+
+  private calculateAverageLoss(losingTrades: TradeResponseDto[]): string {
+    if (!losingTrades.length) return '0.00';
+    const totalLoss = losingTrades.reduce((sum, t) => sum.plus(t.pnl || '0'), new BigNumber(0));
+    return totalLoss.dividedBy(losingTrades.length).toFixed(2);
+  }
+
+  private calculateMaxDrawdown(trades: TradeResponseDto[]): string {
+    if (trades.length === 0) return '0.00';
+
+    let peak = new BigNumber(0);
+    let maxDrawdown = new BigNumber(0);
+    let currentDrawdown = new BigNumber(0);
+
+    trades.forEach(trade => {
+      const pnl = new BigNumber(trade.pnl || '0');
+      currentDrawdown = currentDrawdown.plus(pnl);
+
+      if (currentDrawdown.isGreaterThan(peak)) {
+        peak = currentDrawdown;
       }
-    }
-    
-    return max;
+
+      const drawdown = peak.minus(currentDrawdown);
+      if (drawdown.isGreaterThan(maxDrawdown)) {
+        maxDrawdown = drawdown;
+      }
+    });
+
+    return maxDrawdown.toFixed(2);
   }
 
   private calculateProfitFactor(trades: TradeResponseDto[]): string {
     const grossProfit = trades
       .filter(t => this.isProfitableTrade(t))
-      .reduce((sum, t) => sum + parseFloat(t.pnl || '0'), 0);
+      .reduce((sum, t) => sum.plus(t.pnl || '0'), new BigNumber(0));
       
-    const grossLoss = Math.abs(trades
+    const grossLoss = trades
       .filter(t => this.isUnprofitableTrade(t))
-      .reduce((sum, t) => sum + parseFloat(t.pnl || '0'), 0));
+      .reduce((sum, t) => sum.plus(t.pnl || '0'), new BigNumber(0))
+      .abs();
 
-    if (grossLoss === 0) return '∞';
-    return (grossProfit / grossLoss).toFixed(2);
+    if (grossLoss.isEqualTo(0)) return '∞';
+    return grossProfit.dividedBy(grossLoss).toFixed(2);
   }
 
   private calculateSharpeRatio(trades: TradeResponseDto[]): string {
     if (trades.length < 2) return '0.00';
 
-    const returns = trades.map(t => parseFloat(t.pnl || '0'));
-    const avgReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
+    const returns = trades.map(t => new BigNumber(t.pnl || '0'));
+    const avgReturn = returns.reduce((a, b) => a.plus(b), new BigNumber(0)).dividedBy(returns.length);
     
-    const variance = returns.reduce((sq, n) => sq + Math.pow(n - avgReturn, 2), 0) / (returns.length - 1);
-    const stdDev = Math.sqrt(variance);
+    const variance = returns
+      .reduce((sq, n) => sq.plus(n.minus(avgReturn).pow(2)), new BigNumber(0))
+      .dividedBy(returns.length - 1);
+    const stdDev = variance.sqrt();
 
-    if (stdDev === 0) return '0.00';
-    return (avgReturn / stdDev).toFixed(2);
+    if (stdDev.isEqualTo(0)) return '0.00';
+    return avgReturn.dividedBy(stdDev).toFixed(2);
   }
 }

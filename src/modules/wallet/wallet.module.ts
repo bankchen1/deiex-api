@@ -1,13 +1,11 @@
 import { Module } from '@nestjs/common';
-import { WalletController } from './wallet.controller';
-import { WalletService } from './wallet.service';
+import { WalletService } from './services/wallet.service';
 import { PrismaModule } from '../prisma/prisma.module';
-import { TwoFactorModule } from '../auth/two-factor.module';
 import { ConfigModule } from '@nestjs/config';
+import { RedisCacheModule } from '../redis/redis.module';
 
 @Module({
-  imports: [PrismaModule, TwoFactorModule, ConfigModule],
-  controllers: [WalletController],
+  imports: [PrismaModule, ConfigModule, RedisCacheModule],
   providers: [WalletService],
   exports: [WalletService],
 })

@@ -2,7 +2,7 @@ export class TradeDto {
   id: string;
   price: number;
   quantity: number;
-  side: string;
+  side: 'buy' | 'sell';
   createdAt: Date;
 }
 

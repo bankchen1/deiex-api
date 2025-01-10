@@ -1,8 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { Counter, Gauge, Registry } from 'prom-client';
-import { RedisClientService } from '../redis/redis.service';
-import { PrismaService } from '../prisma/prisma.service';
-import { Prisma } from '@prisma/client';
+import { Counter, Registry, Gauge } from 'prom-client';
 
 @Injectable()
 export class PrometheusService {
@@ -10,97 +7,54 @@ export class PrometheusService {
   private readonly orderCounter: Counter;
   private readonly tradeCounter: Counter;
   private readonly positionGauge: Gauge;
-  private readonly balanceGauge: Gauge;
 
-  constructor(
-    private readonly redis: RedisClientService,
-    private readonly prisma: PrismaService,
-  ) {
+  constructor() {
     this.registry = new Registry();
-
+    
+    // 订单计数器
     this.orderCounter = new Counter({
       name: 'deiex_orders_total',
-      help: 'Total number of orders',
-      labelNames: ['symbol', 'side', 'type'],
-      registers: [this.registry],
+      help: '订单总数',
+      labelNames: ['type', 'status'],
     });
 
+    // 交易计数器
     this.tradeCounter = new Counter({
       name: 'deiex_trades_total',
-      help: 'Total number of trades',
+      help: '交易总数',
       labelNames: ['symbol', 'side'],
-      registers: [this.registry],
     });
 
+    // 持仓量表
     this.positionGauge = new Gauge({
       name: 'deiex_positions',
-      help: 'Current positions',
+      help: '当前持仓量',
       labelNames: ['symbol', 'side'],
-      registers: [this.registry],
     });
 
-    this.balanceGauge = new Gauge({
-      name: 'deiex_balances',
-      help: 'Current balances',
-      labelNames: ['currency'],
-      registers: [this.registry],
-    });
+    // 注册指标
+    this.registry.registerMetric(this.orderCounter);
+    this.registry.registerMetric(this.tradeCounter);
+    this.registry.registerMetric(this.positionGauge);
   }
 
-  getMetrics(): Promise<string> {
-    return this.registry.metrics();
+  // 增加订单计数
+  incrementOrderCounter(type: string, status: string): void {
+    this.orderCounter.inc({ type, status });
   }
 
-  incrementOrderCounter(symbol: string, side: string, type: string): void {
-    this.orderCounter.labels(symbol, side, type).inc();
-  }
-
+  // 增加交易计数
   incrementTradeCounter(symbol: string, side: string): void {
-    this.tradeCounter.labels(symbol, side).inc();
+    this.tradeCounter.inc({ symbol, side });
   }
 
-  async updatePositionGauge(symbol: string, side: string, value: number): Promise<void> {
-    this.positionGauge.labels(symbol, side).set(value);
+  // 更新持仓量
+  updatePosition(symbol: string, side: string, value: number): void {
+    this.positionGauge.set({ symbol, side }, value);
   }
 
-  async updateBalanceGauge(currency: string, value: number): Promise<void> {
-    this.balanceGauge.labels(currency).set(value);
-  }
-
-  async collectMetrics(): Promise<void> {
-    // 收集持仓数据
-    const positions = await this.prisma.$queryRaw<Array<{
-      symbol: string;
-      side: string;
-      total_quantity: string;
-    }>>`
-      SELECT symbol, side, SUM(quantity) as total_quantity
-      FROM "Position"
-      GROUP BY symbol, side
-    `;
-
-    for (const position of positions) {
-      if (position.total_quantity) {
-        this.positionGauge
-          .labels(position.symbol, position.side)
-          .set(parseFloat(position.total_quantity));
-      }
-    }
-
-    // 收集余额数据
-    const balances = await this.prisma.$queryRaw<Array<{
-      currency: string;
-      total_available: string;
-      total_locked: string;
-    }>>`
-      SELECT currency, SUM(available) as total_available, SUM(locked) as total_locked
-      FROM "Balance"
-      GROUP BY currency
-    `;
-
-    for (const balance of balances) {
-      const total = parseFloat(balance.total_available) + parseFloat(balance.total_locked);
-      this.balanceGauge.labels(balance.currency).set(total);
-    }
+  // 获取所有指标
+  async getMetrics(): Promise<string> {
+    return this.registry.metrics();
   }
 } 

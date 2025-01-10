@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRedis } from '@nestjs-modules/ioredis';
 import { Redis } from 'ioredis';
-import type { ChainableCommander } from 'ioredis';
 
 @Injectable()
 export class RedisClientService {
@@ -71,11 +70,11 @@ export class RedisClientService {
     return keys;
   }
 
-  async multi(): Promise<ChainableCommander> {
+  async multi(): Promise<any> {
     return this.redis.multi();
   }
 
-  async exec(pipeline: ChainableCommander): Promise<void> {
+  async exec(pipeline: any): Promise<void> {
     await pipeline.exec();
   }
 

@@ -1,9 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { RedisClientService } from '../redis/redis.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { MarketDataDto } from './dto/market-data.dto';
 import { OrderBookDto, OrderBookEntryDto } from './dto/order-book.dto';
 import { TradeHistoryDto, TradeDto } from './dto/trade-history.dto';
+import { MarketDataDto } from './dto/market-data.dto';
 import { Prisma } from '@prisma/client';
 
 @Injectable()
@@ -58,7 +58,7 @@ export class MarketService {
         id: trade.id,
         price: parseFloat(trade.price),
         quantity: parseFloat(trade.amount),
-        side: trade.side,
+        side: trade.side.toLowerCase() as 'buy' | 'sell',
         createdAt: trade.createdAt,
       })),
     };
