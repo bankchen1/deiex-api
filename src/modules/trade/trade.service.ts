@@ -20,6 +20,7 @@ import {
   TradeCreateInput,
   OrderCreateInput,
   PositionCreateInput,
+  TradeWhereInput,
 } from './types/trade.prisma';
 import {
   CreateOrderDto,
@@ -298,6 +299,32 @@ export class TradeService {
     response.createdAt = position.createdAt;
     response.updatedAt = position.updatedAt;
     return response;
+  }
+
+  async getUserTrades(userId: string, symbol?: string): Promise<TradeResponseDto[]> {
+    const where: TradeWhereInput = {
+      OR: [
+        { userId },
+        { makerUserId: userId },
+        { takerUserId: userId },
+      ],
+    };
+
+    if (symbol) {
+      where.symbol = symbol;
+    }
+
+    const trades = await this.prisma.trade.findMany({
+      where,
+      orderBy: {
+        createdAt: 'desc',
+      },
+      include: {
+        user: true,
+      },
+    });
+
+    return trades.map(trade => this.mapTradeToResponse(trade));
   }
 
   // ... rest of the file remains unchanged ...

@@ -140,6 +140,22 @@ export class TradeResponseDto {
   @IsString()
   fee?: string;
 
+  @IsOptional()
+  @IsString()
+  makerOrderId?: string;
+
+  @IsOptional()
+  @IsString()
+  takerOrderId?: string;
+
+  @IsOptional()
+  @IsString()
+  makerUserId?: string;
+
+  @IsOptional()
+  @IsString()
+  takerUserId?: string;
+
   createdAt: Date;
   updatedAt: Date;
 }

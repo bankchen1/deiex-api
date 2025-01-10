@@ -1,23 +1,23 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { PrismaModule } from './modules/prisma/prisma.module';
-import { AuthModule } from './modules/auth/auth.module';
+import { RedisCacheModule } from './modules/redis/redis.module';
 import { MarketModule } from './modules/market/market.module';
 import { PerpetualModule } from './modules/perpetual/perpetual.module';
-import { RedisModule } from './modules/redis/redis.module';
-import { PrometheusModule } from './modules/shared/prometheus/prometheus.module';
+import { StatisticsModule } from './modules/statistics/statistics.module';
+import { PrometheusModule } from './modules/prometheus/prometheus.module';
+import { TradeModule } from './modules/trade/trade.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
     }),
-    PrismaModule,
-    AuthModule,
+    RedisCacheModule,
     MarketModule,
     PerpetualModule,
-    RedisModule,
+    StatisticsModule,
     PrometheusModule,
+    TradeModule,
   ],
 })
 export class AppModule {}

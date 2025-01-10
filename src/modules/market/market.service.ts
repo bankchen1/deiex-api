@@ -1,85 +1,87 @@
 import { Injectable } from '@nestjs/common';
-import { InjectRedis } from '@nestjs-modules/ioredis';
-import Redis from 'ioredis';
-import {
-  MarketOverviewDto,
-  TickerDto,
-  OrderBookDto,
-  KlineDto,
-  KlineInterval,
-  RecentTradeDto,
-} from './dto/market.dto';
+import { RedisClientService } from '../redis/redis.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { MarketDataDto } from './dto/market-data.dto';
+import { OrderBookDto, OrderBookEntryDto } from './dto/order-book.dto';
+import { TradeHistoryDto, TradeDto } from './dto/trade-history.dto';
+import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class MarketService {
-  constructor(@InjectRedis() private readonly redis: Redis) {}
+  constructor(
+    private readonly redis: RedisClientService,
+    private readonly prisma: PrismaService,
+  ) {}
 
-  async getOverview(): Promise<MarketOverviewDto> {
-    const btcTicker = await this.getTicker('BTCUSDT');
-    return {
-      btc: {
-        price: btcTicker.price,
-        priceChangePercent: btcTicker.priceChangePercent,
-      },
-    };
-  }
-
-  async getTickers(): Promise<TickerDto[]> {
-    const tickers = await this.redis.hgetall('tickers');
-    return Object.entries(tickers).map(([symbol, data]) => {
-      const ticker = JSON.parse(data);
-      return {
-        symbol,
-        price: ticker.price,
-        priceChangePercent: ticker.priceChangePercent,
-        volume: ticker.volume,
-        count: ticker.count,
-      };
-    });
-  }
-
-  async getTicker(symbol: string): Promise<TickerDto> {
-    const data = await this.redis.hget('tickers', symbol);
-    if (!data) {
-      throw new Error(`Ticker not found for symbol: ${symbol}`);
-    }
-    const ticker = JSON.parse(data);
+  async getMarketData(symbol: string): Promise<MarketDataDto> {
+    const marketData = await this.redis.hgetall(`market:${symbol}`);
     return {
       symbol,
-      price: ticker.price,
-      priceChangePercent: ticker.priceChangePercent,
-      volume: ticker.volume,
-      count: ticker.count,
+      price: parseFloat(marketData.price || '0'),
+      volume24h: parseFloat(marketData.volume24h || '0'),
+      high24h: parseFloat(marketData.high24h || '0'),
+      low24h: parseFloat(marketData.low24h || '0'),
+      change24h: parseFloat(marketData.change24h || '0'),
     };
   }
 
-  async getOrderBook(symbol: string, limit?: number): Promise<OrderBookDto> {
-    const data = await this.redis.hget('orderbooks', symbol);
-    if (!data) {
-      throw new Error(`Order book not found for symbol: ${symbol}`);
-    }
-    const orderBook = JSON.parse(data);
-    const maxDepth = limit || 100;
+  async getOrderBook(symbol: string): Promise<OrderBookDto> {
+    const [bids, asks] = await Promise.all([
+      this.redis.hgetall(`orderbook:${symbol}:bids`),
+      this.redis.hgetall(`orderbook:${symbol}:asks`),
+    ]);
+
     return {
-      lastUpdateId: orderBook.lastUpdateId,
-      bids: orderBook.bids.slice(0, maxDepth),
-      asks: orderBook.asks.slice(0, maxDepth),
+      symbol,
+      bids: Object.entries(bids).map(([price, quantity]): OrderBookEntryDto => ({
+        price: parseFloat(price),
+        quantity: parseFloat(quantity),
+      })),
+      asks: Object.entries(asks).map(([price, quantity]): OrderBookEntryDto => ({
+        price: parseFloat(price),
+        quantity: parseFloat(quantity),
+      })),
+      timestamp: Date.now(),
     };
   }
 
-  async getKlines(
-    symbol: string,
-    interval: KlineInterval,
-    limit?: number,
-  ): Promise<KlineDto[]> {
-    const key = `klines:${symbol}:${interval}`;
-    const data = await this.redis.lrange(key, 0, limit ? limit - 1 : 499);
-    return data.map((item) => JSON.parse(item));
+  async getTradeHistory(symbol: string): Promise<TradeHistoryDto> {
+    const trades = await this.prisma.trade.findMany({
+      where: { symbol },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+
+    return {
+      symbol,
+      trades: trades.map((trade): TradeDto => ({
+        id: trade.id,
+        price: parseFloat(trade.price),
+        quantity: parseFloat(trade.amount),
+        side: trade.side,
+        createdAt: trade.createdAt,
+      })),
+    };
   }
 
-  async getRecentTrades(symbol: string, limit?: number): Promise<RecentTradeDto[]> {
-    const key = `trades:${symbol}`;
-    const data = await this.redis.lrange(key, 0, limit ? limit - 1 : 499);
-    return data.map((item) => JSON.parse(item));
+  async updateMarketData(symbol: string, data: Partial<MarketDataDto>): Promise<void> {
+    const updates = Object.entries(data)
+      .filter(([_, value]) => value !== undefined)
+      .map(([key, value]) => [key, value.toString()]);
+
+    if (updates.length > 0) {
+      for (const [key, value] of updates) {
+        await this.redis.hset(`market:${symbol}`, key, value);
+      }
+    }
+  }
+
+  async updateOrderBook(symbol: string, side: string, price: number, quantity: number): Promise<void> {
+    const key = `orderbook:${symbol}:${side.toLowerCase()}s`;
+    if (quantity > 0) {
+      await this.redis.hset(key, price.toString(), quantity.toString());
+    } else {
+      await this.redis.hdel(key, price.toString());
+    }
   }
 }

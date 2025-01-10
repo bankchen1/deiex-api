@@ -1,16 +1,14 @@
 import { Module } from '@nestjs/common';
-import { RedisModule } from '../redis/redis.module';
+import { PerpetualService } from './perpetual.service';
 import { PerpetualController } from './perpetual.controller';
-import { PerpetualService } from './services/perpetual.service';
-import { RiskManagementService } from './services/risk-management.service';
-import { ADLService } from './services/adl.service';
-import { PrometheusModule } from '../shared/prometheus/prometheus.module';
+import { RedisCacheModule } from '../redis/redis.module';
 import { PrismaModule } from '../prisma/prisma.module';
+import { MarketModule } from '../market/market.module';
 
 @Module({
-  imports: [RedisModule, PrometheusModule, PrismaModule],
+  imports: [RedisCacheModule, PrismaModule, MarketModule],
   controllers: [PerpetualController],
-  providers: [PerpetualService, RiskManagementService, ADLService],
+  providers: [PerpetualService],
   exports: [PerpetualService],
 })
 export class PerpetualModule {}

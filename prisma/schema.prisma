@@ -91,10 +91,10 @@ model Trade {
   profitPercent Float?
   pnl           String?
   fee           String?
-  makerOrderId  String
-  takerOrderId  String
-  makerUserId   String
-  takerUserId   String
+  makerOrderId  String?
+  takerOrderId  String?
+  makerUserId   String?
+  takerUserId   String?
   orderId       String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt

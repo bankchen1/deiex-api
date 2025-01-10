@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRedis } from '@nestjs-modules/ioredis';
 import { Redis } from 'ioredis';
+import type { ChainableCommander } from 'ioredis';
 
 @Injectable()
 export class RedisClientService {
@@ -9,63 +10,86 @@ export class RedisClientService {
   ) {}
 
   async get(key: string): Promise<string | null> {
-    return await this.redis.get(key);
+    return this.redis.get(key);
   }
 
-  async set(key: string, value: string, ttl?: number): Promise<'OK'> {
+  async set(key: string, value: string, ttl?: number): Promise<void> {
     if (ttl) {
-      return await this.redis.set(key, value, 'EX', ttl);
+      await this.redis.set(key, value, 'EX', ttl);
+    } else {
+      await this.redis.set(key, value);
     }
-    return await this.redis.set(key, value);
   }
 
-  async del(key: string): Promise<number> {
-    return await this.redis.del(key);
-  }
-
-  async exists(key: string): Promise<number> {
-    return await this.redis.exists(key);
-  }
-
-  async expire(key: string, seconds: number): Promise<number> {
-    return await this.redis.expire(key, seconds);
-  }
-
-  async ttl(key: string): Promise<number> {
-    return await this.redis.ttl(key);
-  }
-
-  async keys(pattern: string): Promise<string[]> {
-    return await this.redis.keys(pattern);
+  async del(key: string): Promise<void> {
+    await this.redis.del(key);
   }
 
   async hget(key: string, field: string): Promise<string | null> {
-    return await this.redis.hget(key, field);
+    return this.redis.hget(key, field);
   }
 
-  async hset(key: string, field: string, value: string): Promise<number> {
-    return await this.redis.hset(key, field, value);
+  async hset(key: string, field: string, value: string): Promise<void> {
+    await this.redis.hset(key, field, value);
   }
 
-  async hdel(key: string, field: string): Promise<number> {
-    return await this.redis.hdel(key, field);
+  async hdel(key: string, field: string): Promise<void> {
+    await this.redis.hdel(key, field);
   }
 
   async hgetall(key: string): Promise<Record<string, string>> {
-    return await this.redis.hgetall(key);
+    return this.redis.hgetall(key);
   }
 
-  async hincrby(key: string, field: string, increment: number): Promise<number> {
-    return await this.redis.hincrby(key, field, increment);
+  async expire(key: string, ttl: number): Promise<void> {
+    await this.redis.expire(key, ttl);
   }
 
-  async publish(channel: string, message: string): Promise<number> {
-    return await this.redis.publish(channel, message);
+  async ttl(key: string): Promise<number> {
+    return this.redis.ttl(key);
   }
 
-  async subscribe(channel: string, callback: (channel: string, message: string) => void): Promise<void> {
+  async exists(key: string): Promise<boolean> {
+    const result = await this.redis.exists(key);
+    return result === 1;
+  }
+
+  async keys(pattern: string): Promise<string[]> {
+    return this.redis.keys(pattern);
+  }
+
+  async scan(pattern: string): Promise<string[]> {
+    let cursor = '0';
+    const keys: string[] = [];
+
+    do {
+      const [nextCursor, scanKeys] = await this.redis.scan(cursor, 'MATCH', pattern);
+      cursor = nextCursor;
+      keys.push(...scanKeys);
+    } while (cursor !== '0');
+
+    return keys;
+  }
+
+  async multi(): Promise<ChainableCommander> {
+    return this.redis.multi();
+  }
+
+  async exec(pipeline: ChainableCommander): Promise<void> {
+    await pipeline.exec();
+  }
+
+  async publish(channel: string, message: string): Promise<void> {
+    await this.redis.publish(channel, message);
+  }
+
+  async subscribe(channel: string, callback: (message: string) => void): Promise<void> {
     await this.redis.subscribe(channel);
-    this.redis.on('message', callback);
+    this.redis.on('message', (ch: string, message: string) => {
+      if (ch === channel) {
+        callback(message);
+      }
+    });
   }
 
   async unsubscribe(channel: string): Promise<void> {

@@ -30,12 +30,19 @@ export interface TradeCreateInput extends Prisma.TradeCreateInput {
   orderId?: string | null;
 }
 
-export interface TradeWhereInput extends Prisma.TradeWhereInput {
+export interface TradeWhereInput extends Omit<Prisma.TradeWhereInput, 'OR'> {
+  OR?: Array<{
+    userId?: string;
+    makerUserId?: string | null;
+    takerUserId?: string | null;
+    symbol?: string;
+  }>;
   makerOrderId?: string | null;
   takerOrderId?: string | null;
   makerUserId?: string | null;
   takerUserId?: string | null;
   orderId?: string | null;
+  symbol?: string;
 }
 
 export type TradeSelect = Prisma.TradeSelect;

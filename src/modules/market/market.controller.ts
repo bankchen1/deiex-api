@@ -1,49 +1,25 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Param, Query } from '@nestjs/common';
 import { MarketService } from './market.service';
-import {
-  MarketOverviewDto,
-  TickerDto,
-  OrderBookDto,
-  OrderBookQueryDto,
-  KlineDto,
-  KlineQueryDto,
-  RecentTradeDto,
-} from './dto/market.dto';
+import { MarketDataDto } from './dto/market-data.dto';
+import { OrderBookDto } from './dto/order-book.dto';
+import { TradeHistoryDto } from './dto/trade-history.dto';
 
 @Controller('market')
 export class MarketController {
   constructor(private readonly marketService: MarketService) {}
 
-  @Get('overview')
-  async getOverview(): Promise<MarketOverviewDto> {
-    return this.marketService.getOverview();
+  @Get(':symbol/market-data')
+  async getMarketData(@Param('symbol') symbol: string): Promise<MarketDataDto> {
+    return this.marketService.getMarketData(symbol);
   }
 
-  @Get('tickers')
-  async getTickers(): Promise<TickerDto[]> {
-    return this.marketService.getTickers();
+  @Get(':symbol/order-book')
+  async getOrderBook(@Param('symbol') symbol: string): Promise<OrderBookDto> {
+    return this.marketService.getOrderBook(symbol);
   }
 
-  @Get('ticker')
-  async getTicker(@Query('symbol') symbol: string): Promise<TickerDto> {
-    return this.marketService.getTicker(symbol);
-  }
-
-  @Get('orderbook')
-  async getOrderBook(@Query() query: OrderBookQueryDto): Promise<OrderBookDto> {
-    return this.marketService.getOrderBook(query.symbol, query.limit);
-  }
-
-  @Get('klines')
-  async getKlines(@Query() query: KlineQueryDto): Promise<KlineDto[]> {
-    return this.marketService.getKlines(query.symbol, query.interval, query.limit);
-  }
-
-  @Get('trades')
-  async getRecentTrades(
-    @Query('symbol') symbol: string,
-    @Query('limit') limit?: number,
-  ): Promise<RecentTradeDto[]> {
-    return this.marketService.getRecentTrades(symbol, limit);
+  @Get(':symbol/trade-history')
+  async getTradeHistory(@Param('symbol') symbol: string): Promise<TradeHistoryDto> {
+    return this.marketService.getTradeHistory(symbol);
   }
 }

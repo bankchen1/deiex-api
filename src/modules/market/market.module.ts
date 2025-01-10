@@ -1,10 +1,11 @@
 import { Module } from '@nestjs/common';
 import { MarketController } from './market.controller';
 import { MarketService } from './market.service';
-import { RedisModule } from '../redis/redis.module';
+import { RedisCacheModule } from '../redis/redis.module';
+import { PrismaModule } from '../prisma/prisma.module';
 
 @Module({
-  imports: [RedisModule],
+  imports: [RedisCacheModule, PrismaModule],
   controllers: [MarketController],
   providers: [MarketService],
   exports: [MarketService],
